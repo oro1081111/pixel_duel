@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  --accent: #6366f1;
+  --card-w: 70px;
+  --card-h: 100px;
+  --slot-w: 76px;
+}
+
+body {
+  @apply bg-slate-50 antialiased;
+  color: #0f172a;
+  font-family: var(--font-sans);
+}
+
+.minimal-card {
+  @apply bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden flex flex-col;
+  width: var(--card-w);
+  height: var(--card-h);
+}
+
+.minimal-slot {
+  @apply w-[var(--slot-w)] h-40 border border-slate-200 bg-slate-100/30 rounded-xl relative transition-all duration-300;
+}
+
+.resource-chip {
+  @apply flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter;
+}
+
+.dot {
+  @apply w-1.5 h-1.5 rounded-full;
+}
+
+.phase-dot {
+  @apply text-[10px] font-bold text-slate-400 uppercase flex flex-col items-center gap-1;
+}
+
+.phase-dot.active {
+  @apply text-indigo-600;
+}
+
+.phase-ui-dot {
+  @apply w-2 h-2 bg-slate-200 rounded-full transition-all;
+}
+
+.phase-dot.active .phase-ui-dot {
+  @apply bg-indigo-600 scale-125;
+}
+
+.attr-chip {
+  /* 卡牌（場上）左右屬性圓點：稍微小一點 */
+  @apply w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black text-white;
+}
+
+.attr-chip-hand {
+  /* 手牌 / 基礎屬性圓點 */
+  @apply w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-black text-white;
+}
+
+/*
+ * 統一卡牌外觀：場上卡牌與手牌卡牌都共用同一個結構。
+ * - 透過 CSS 變數控制尺寸（手牌會設定較小的變數）
+ */
+.card-frame {
+  width: var(--card-w, 70px);
+  height: var(--card-h, 100px);
+  /* 注意：不要在這裡設定 shadow，否則會覆蓋 tailwind 的 ring(發光) box-shadow */
+  @apply bg-white border-2 border-slate-200 rounded-xl flex flex-col overflow-visible transition-all;
+}
+
+.card-frame-header {
+  height: var(--header-h, 28px);
+  @apply border-b border-slate-50 flex items-center justify-around;
+}
+
+.card-frame-chip {
+  width: var(--chip, 16px);
+  height: var(--chip, 16px);
+  font-size: var(--chip-font, 8px);
+  @apply rounded-full flex items-center justify-center font-black text-white;
+}
+
+.card-frame-title {
+  font-size: var(--title-font, 10px);
+  @apply flex-1 flex items-center justify-center text-center font-black leading-tight text-slate-700 uppercase px-2;
+}
+
+.action-btn {
+  @apply bg-indigo-600 text-white px-6 py-2.5 rounded-lg font-bold text-sm shadow-md shadow-indigo-200 hover:bg-indigo-500 active:scale-95 transition-all;
+}
