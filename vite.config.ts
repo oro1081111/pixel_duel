@@ -5,6 +5,9 @@ import {defineConfig, loadEnv} from 'vite';
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
+    // For GitHub Pages (Project Pages): https://<user>.github.io/<repo>/
+    // When deploying elsewhere, you can override via env: VITE_BASE (e.g. '/pixel_duel/')
+    base: env.VITE_BASE || '/pixel_duel/',
     plugins: [tailwindcss()],
     resolve: {
       alias: {

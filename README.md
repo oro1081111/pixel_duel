@@ -46,6 +46,14 @@ npm install
 npm run dev
 ```
 
+> 注意：Windows 某些環境綁定 `0.0.0.0:3000` 可能會出現 `EACCES` 權限問題。
+> 本 repo 預設已改為綁定 `127.0.0.1:5173`。
+> 若你要讓同網段手機/其他電腦連進來，再使用：
+>
+> ```bash
+> npm run dev:lan
+> ```
+
 Vite 會輸出本機網址（例如 `http://localhost:3000`）。如果 3000/3001 被佔用會自動往後找可用 port。
 
 ---
@@ -56,6 +64,34 @@ Vite 會輸出本機網址（例如 `http://localhost:3000`）。如果 3000/300
 npm run build
 npm run preview
 ```
+
+---
+
+## 部署到 GitHub Pages（分享給別人玩）
+
+此 repo 已內建 GitHub Actions（`.github/workflows/deploy-pages.yml`），只要 push 到 `main` 就會自動 build 並部署到 Pages。
+
+### 1) 在 GitHub 開啟 Pages
+
+到 GitHub repo（`Settings` → `Pages`）：
+
+- **Build and deployment**
+  - **Source**：選 **GitHub Actions**
+
+存檔後，之後每次 push 到 `main` 都會自動更新。
+
+### 2) 你的分享連結
+
+此 repo 是 Project Pages，預期網址：
+
+- `https://oro1081111.github.io/pixel_duel/`
+
+（第一次部署可能需要等 1~3 分鐘，Actions 跑完後才會出現。）
+
+### 3) 常見問題（404 / 空白頁）
+
+GitHub Pages 會把網站放在 `/<repoName>/` 子路徑下，所以 Vite 的 `base` 必須正確。
+本 repo 已在 `vite.config.ts` 設定 `base: '/pixel_duel/'`。
 
 ---
 
