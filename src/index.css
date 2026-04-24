@@ -9,7 +9,7 @@
   --accent: #6366f1;
   --card-w: 70px;
   --card-h: 100px;
-  --slot-w: 76px;
+  --slot-w: 70px;
 }
 
 body {
@@ -70,6 +70,8 @@ body {
   width: var(--card-w, 70px);
   height: var(--card-h, 100px);
   /* 注意：不要在這裡設定 shadow，否則會覆蓋 tailwind 的 ring(發光) box-shadow */
+  /* 統一把 ring 的顏色「淡一點」 */
+  --tw-ring-opacity: 0.35;
   @apply bg-white border-2 border-slate-200 rounded-xl flex flex-col overflow-visible transition-all;
 }
 
