@@ -2997,9 +2997,16 @@ function renderMobilePlayerBlock(
                 if (card.effectId === 'illusion' && isActiveEffect && illusionSelectionMode && illusionSourceAreaIdx === aIdx) cardEl.classList.add('ring-2', 'ring-teal-400', 'z-40');
                 if (effId === 'lucky' && isActiveEffect && isCurrent && currentPhaseIndex === 1 && (diceResults.length === 0 || luckySelectionMode)) cardEl.classList.add('ring-2', 'ring-lime-400', 'z-40');
 
-                const displayEffectName = (card.effectId === 'illusion' && p.illusionCopiedEffectIds[aIdx])
-                    ? `幻象幽影[${EFFECTS.find(e => e.id === p.illusionCopiedEffectIds[aIdx])?.name || ''}]`
-                    : card.effectName;
+                const displayEffectName = (() => {
+                    if (card.effectId !== 'illusion') return card.effectName;
+                    const copiedId = p.illusionCopiedEffectIds[aIdx];
+                    if (!copiedId) return card.effectName;
+                    const copiedName = EFFECTS.find(e => e.id === copiedId)?.name || '';
+                    // 需求：顯示成兩行
+                    // 幻象幽影
+                    // [該卡名稱]
+                    return copiedName ? `幻象幽影\n${copiedName}` : '幻象幽影';
+                })();
                 const nameForUI = (isTop && isActiveEffect) ? displayEffectName : card.effectName;
                 cardEl.innerHTML = renderCardContentHTML({...card, effectName: nameForUI}, typeColors, {showTooltip: isTop && isActiveEffect});
                 if (isTop && isActiveEffect) {
@@ -3772,9 +3779,16 @@ function renderPlayerArea(idx: 0 | 1) {
         };
 
         // Note: displayEffectName 仍保留給幻象顯示，但目前卡牌名稱顯示只顯示效果名
-        const displayEffectName = (card.effectId === 'illusion' && p.illusionCopiedEffectIds[aIdx])
-            ? `幻象幽影[${EFFECTS.find(e => e.id === p.illusionCopiedEffectIds[aIdx])?.name || ''}]`
-            : card.effectName;
+        const displayEffectName = (() => {
+            if (card.effectId !== 'illusion') return card.effectName;
+            const copiedId = p.illusionCopiedEffectIds[aIdx];
+            if (!copiedId) return card.effectName;
+            const copiedName = EFFECTS.find(e => e.id === copiedId)?.name || '';
+            // 需求：顯示成兩行
+            // 幻象幽影
+            // [該卡名稱]
+            return copiedName ? `幻象幽影\n${copiedName}` : '幻象幽影';
+        })();
 
         // 被覆蓋的卡牌：名稱也要保留；tooltip 只給最上層生效卡（避免互相遮擋）
         const nameForUI = (isTop && isActiveEffect) ? displayEffectName : card.effectName;

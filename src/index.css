@@ -89,7 +89,8 @@ body {
 
 .card-frame-title {
   font-size: var(--title-font, 10px);
-  @apply flex-1 flex items-center justify-center text-center font-black leading-tight text-slate-700 uppercase px-2;
+  /* allow \n in card title (e.g. 幻象幽影\n[名稱]) */
+  @apply flex-1 flex items-center justify-center text-center font-black leading-tight text-slate-700 uppercase px-2 whitespace-pre-line;
 }
 
 .action-btn {
