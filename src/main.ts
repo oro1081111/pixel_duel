@@ -206,91 +206,14 @@ const PHASE_NAMES = [
 let deck: GameCard[] = [];
 let market: Array<GameCard | null> = [null, null, null]; // [price3, price2, price1]
 let buyDeckDrawCount = 0; // 購買階段：已從牌庫抽了幾張 (1st/2nd/3rd)
-let players = [
-  {
-    name: '玩家 A',
-    hp: 12,
-    hand: [],
-    board: [[], [], []], // 3 Areas
-    activeAreaEffects: [null, null, null], // 3 effects
-    attackQueue: [[], [], []],
-    piercingQueue: [[], [], []],
-    magic: 0,
-    gold: 0,
-    defense: 0,
-    currentAttacks: [[0], [0], [0]],
-    piercingAttacks: [[], [], []],
-    cardsPlayedThisTurn: 0,
-    chargeUsedIndices: [],
-    amplifyUsedIndices: [],
-    fateUsedIndices: [],
-    evasionUsedIndices: [],
-    reproductionUsedIndices: [],
-    flareUsedIndices: [],
-    thrustUsedIndices: [],
-    barrierUsedIndices: [],
-    forestUsedIndices: [],
-    frostUsedIndices: [],
-    magicLuckUsedIndices: [],
-    illusionUsedIndices: [],
-    illusionCopiedEffectIds: [null, null, null],
-    magicSpentInJudging: 0,
-    extraFrostAttacks: [[], [], []],
-    contractTriggeredAreaIdx: -1,
-    turnBaseStats: {
-      sums: [0, 0, 0],
-      defense: [0, 0, 0],
-      magic: [0, 0, 0],
-      gold: [0, 0, 0]
-    },
-    breakthroughApplied: false
-  },
-  {
-    name: '玩家 B',
-    hp: 12,
-    hand: [],
-    board: [[], [], []],
-    activeAreaEffects: [null, null, null],
-    attackQueue: [[], [], []],
-    piercingQueue: [[], [], []],
-    magic: 0,
-    gold: 0,
-    defense: 0,
-    currentAttacks: [[0], [0], [0]],
-    piercingAttacks: [[], [], []],
-    cardsPlayedThisTurn: 0,
-    chargeUsedIndices: [],
-    amplifyUsedIndices: [],
-    fateUsedIndices: [],
-    evasionUsedIndices: [],
-    reproductionUsedIndices: [],
-    flareUsedIndices: [],
-    magicLuckUsedIndices: [],
-    thrustUsedIndices: [],
-    barrierUsedIndices: [],
-    forestUsedIndices: [],
-    frostUsedIndices: [],
-    illusionUsedIndices: [],
-    illusionCopiedEffectIds: [null, null, null],
-    magicSpentInJudging: 0,
-    extraFrostAttacks: [[], [], []],
-    contractTriggeredAreaIdx: -1,
-    turnBaseStats: {
-      sums: [0, 0, 0],
-      defense: [0, 0, 0],
-      magic: [0, 0, 0],
-      gold: [0, 0, 0]
-    },
-    breakthroughApplied: false
-  }
-];
+let players: [PlayerState, PlayerState] = [createPlayer('玩家 A'), createPlayer('玩家 B')];
 
 let currentPlayerIndex = 0;
 let currentPhaseIndex = 0;
-let diceResults = [];
+let diceResults: number[] = [];
 let selectedHandCardIndex = -1;
 let firstPlayerFirstTurn = true;
-let winner = null;
+let winner: string | null = null;
 // Winner modal (可關閉以查看最後場面)
 let winModalDismissed = false;
 let gameLog = ['遊戲開始！'];
@@ -308,7 +231,7 @@ let chargeSelectionMode = false;
 let chargeSourceAreaIdx = -1;
 let fateSelectionMode = false;
 let fateSourceAreaIdx = -1;
-let fateSelectedDiceIndices = [];
+let fateSelectedDiceIndices: number[] = [];
 let evasionSelectionMode = false;
 let evasionSourceAreaIdx = -1;
 let reproductionSelectionMode = false;
@@ -324,8 +247,333 @@ let frostSourceAreaIdx = -1;
 let phaseHint = '選牌出牌';
 let showEffectList = false;
 
+type AppScreen = 'home' | 'rules' | 'game';
+type GameMode = 'pvp' | 'cvp' | 'pvc';
+let appScreen: AppScreen = 'home';
+let selectedMode: GameMode | null = null;
+
+// Match config
+let matchPlayerNames: [string, string] = ['玩家 A', '玩家 B'];
+
 // 防止使用者連點「繼續」造成階段被推進兩次（看起來像跳過判定階段）
 let phaseAdvanceLockUntil = 0;
+
+type PlayerState = {
+    name: string;
+    hp: number;
+    hand: GameCard[];
+    board: GameCard[][];
+    activeAreaEffects: Array<GameCard | null>;
+    attackQueue: number[][];
+    piercingQueue: number[][];
+    magic: number;
+    gold: number;
+    defense: number;
+    currentAttacks: number[][];
+    piercingAttacks: number[][];
+    cardsPlayedThisTurn: number;
+    chargeUsedIndices: number[];
+    amplifyUsedIndices: number[];
+    fateUsedIndices: number[];
+    evasionUsedIndices: number[];
+    reproductionUsedIndices: number[];
+    flareUsedIndices: number[];
+    thrustUsedIndices: number[];
+    barrierUsedIndices: number[];
+    forestUsedIndices: number[];
+    frostUsedIndices: number[];
+    magicLuckUsedIndices: number[];
+    illusionUsedIndices: number[];
+    illusionCopiedEffectIds: Array<string | null>;
+    magicSpentInJudging: number;
+    extraFrostAttacks: number[][];
+    contractTriggeredAreaIdx: number;
+    turnBaseStats: {
+        sums: number[];
+        defense: number[];
+        magic: number[];
+        gold: number[];
+    };
+    breakthroughApplied: boolean;
+};
+
+function createPlayer(name: string): PlayerState {
+    return {
+        name,
+        hp: 12,
+        hand: [],
+        board: [[], [], []],
+        activeAreaEffects: [null, null, null],
+        attackQueue: [[], [], []],
+        piercingQueue: [[], [], []],
+        magic: 0,
+        gold: 0,
+        defense: 0,
+        currentAttacks: [[0], [0], [0]],
+        piercingAttacks: [[], [], []],
+        cardsPlayedThisTurn: 0,
+        chargeUsedIndices: [],
+        amplifyUsedIndices: [],
+        fateUsedIndices: [],
+        evasionUsedIndices: [],
+        reproductionUsedIndices: [],
+        flareUsedIndices: [],
+        thrustUsedIndices: [],
+        barrierUsedIndices: [],
+        forestUsedIndices: [],
+        frostUsedIndices: [],
+        magicLuckUsedIndices: [],
+        illusionUsedIndices: [],
+        illusionCopiedEffectIds: [null, null, null],
+        magicSpentInJudging: 0,
+        extraFrostAttacks: [[], [], []],
+        contractTriggeredAreaIdx: -1,
+        turnBaseStats: {
+            sums: [0, 0, 0],
+            defense: [0, 0, 0],
+            magic: [0, 0, 0],
+            gold: [0, 0, 0]
+        },
+        breakthroughApplied: false
+    };
+}
+
+function resetGameStateForNewMatch() {
+    // Core collections
+    deck = [];
+    market = [null, null, null];
+    buyDeckDrawCount = 0;
+
+    // Players
+    players = [createPlayer(matchPlayerNames[0]), createPlayer(matchPlayerNames[1])];
+
+    // Phase / turn
+    currentPlayerIndex = 0;
+    currentPhaseIndex = 0;
+    diceResults = [];
+    selectedHandCardIndex = -1;
+    firstPlayerFirstTurn = true;
+
+    // Winner UI
+    winner = null;
+    winModalDismissed = false;
+
+    // Logs
+    gameLog = ['遊戲開始！'];
+
+    // One-off flags / mobile UI
+    skippedPlayBecauseNoHand = false;
+    inPreparationPhase = true;
+    handDrawerOpen = false;
+    mobileDockTab = 'hand';
+    mobileOpponentBoardOpen = false;
+
+    // Selection modes
+    chargeSelectionMode = false;
+    chargeSourceAreaIdx = -1;
+    fateSelectionMode = false;
+    fateSourceAreaIdx = -1;
+    fateSelectedDiceIndices = [];
+    evasionSelectionMode = false;
+    evasionSourceAreaIdx = -1;
+    reproductionSelectionMode = false;
+    reproductionSourceAreaIdx = -1;
+    flareSelectionMode = false;
+    flareSourceAreaIdx = -1;
+    luckySelectionMode = false;
+    luckySourceAreaIdx = -1;
+    illusionSelectionMode = false;
+    illusionSourceAreaIdx = -1;
+    frostSelectionMode = false;
+    frostSourceAreaIdx = -1;
+
+    // UI hints
+    phaseHint = '選牌出牌';
+    showEffectList = false;
+
+    phaseAdvanceLockUntil = 0;
+}
+
+function getComputerPlayerIndexForMode(mode: GameMode | null): 0 | 1 | null {
+    if (mode === 'cvp') return 0;
+    if (mode === 'pvc') return 1;
+    return null;
+}
+
+function isComputerMatchMode(mode: GameMode | null) {
+    return mode === 'cvp' || mode === 'pvc';
+}
+
+function isComputerTurnNow() {
+    const c = getComputerPlayerIndexForMode(selectedMode);
+    return appScreen === 'game' && c !== null && currentPlayerIndex === c;
+}
+
+function setMatchPlayerNamesForMode(mode: GameMode) {
+    if (mode === 'cvp') {
+        // Computer first => computer is player 0
+        matchPlayerNames = ['電腦', '玩家'];
+        return;
+    }
+    if (mode === 'pvc') {
+        // Player first => computer is player 1
+        matchPlayerNames = ['玩家', '電腦'];
+        return;
+    }
+    matchPlayerNames = ['玩家 A', '玩家 B'];
+}
+
+function goHome() {
+    appScreen = 'home';
+    selectedMode = null;
+    // keep game state but hide winner overlay etc.
+    winner = null;
+    winModalDismissed = false;
+    showEffectList = false;
+    hideGlobalTooltip();
+    render();
+}
+
+function showRules() {
+    appScreen = 'rules';
+    hideGlobalTooltip();
+    render();
+}
+
+function startPvpGame() {
+    selectedMode = 'pvp';
+    appScreen = 'game';
+    setMatchPlayerNamesForMode('pvp');
+    resetGameStateForNewMatch();
+    initGame();
+}
+
+function startCvpGame() {
+    selectedMode = 'cvp';
+    appScreen = 'game';
+    setMatchPlayerNamesForMode('cvp');
+    resetGameStateForNewMatch();
+    initGame();
+}
+
+function startPvcGame() {
+    selectedMode = 'pvc';
+    appScreen = 'game';
+    setMatchPlayerNamesForMode('pvc');
+    resetGameStateForNewMatch();
+    initGame();
+}
+
+function restartMatch() {
+    // Restart with current selected mode (fallback to PvP).
+    selectedMode = selectedMode || 'pvp';
+    appScreen = 'game';
+    setMatchPlayerNamesForMode(selectedMode);
+    resetGameStateForNewMatch();
+    initGame();
+}
+
+function finishPreparationPhase() {
+    inPreparationPhase = false;
+    // 開始正式流程：先手回合、出牌階段
+    currentPlayerIndex = 0;
+    currentPhaseIndex = 0;
+    selectedHandCardIndex = -1;
+    diceResults = [];
+    skippedPlayBecauseNoHand = false;
+    // Mobile：出牌階段時手牌抽屜自動彈出
+    // 並切到手牌 tab
+    mobileDockTab = 'hand';
+    handDrawerOpen = isMobileLayout();
+    // 準備階段的出牌數不應計入正式回合限制
+    players[0].cardsPlayedThisTurn = 0;
+    players[1].cardsPlayedThisTurn = 0;
+    phaseHint = '選牌出牌';
+    render();
+}
+
+function renderHomeScreen() {
+    const wrap = document.createElement('div');
+    wrap.className = 'min-h-screen w-full bg-[#0b1220] text-white font-sans flex items-center justify-center p-6';
+
+    wrap.innerHTML = `
+        <div class="w-full max-w-3xl">
+            <div class="text-center">
+                <div class="text-[12px] font-black tracking-[0.45em] text-indigo-200 uppercase">PIXEL DUEL</div>
+                <div class="mt-2 text-4xl sm:text-5xl font-black tracking-tight">像素對決</div>
+                <div class="mt-3 text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
+            </div>
+
+            <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button id="modePvp" class="rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] transition-all px-4 py-4 text-left shadow-lg shadow-indigo-900/30 border border-indigo-400/30">
+                    <div class="text-[9px] font-black tracking-[0.3em] text-indigo-200 uppercase">Mode</div>
+                    <div class="mt-1 text-lg font-black">PvP</div>
+                    <div class="mt-1 text-[11px] font-bold text-indigo-100/90">玩家 vs 玩家</div>
+                </button>
+
+                <button id="modeCvp" class="rounded-2xl bg-indigo-600/10 hover:bg-indigo-600/15 active:scale-[0.99] transition-all px-4 py-4 text-left border border-indigo-400/20">
+                    <div class="text-[9px] font-black tracking-[0.3em] text-slate-300 uppercase">Mode</div>
+                    <div class="mt-1 text-lg font-black">CvP</div>
+                    <div class="mt-1 text-[11px] font-bold text-slate-200/90">電腦 vs 玩家（電腦先手）</div>
+                </button>
+
+                <button id="modePvc" class="rounded-2xl bg-indigo-600/10 hover:bg-indigo-600/15 active:scale-[0.99] transition-all px-4 py-4 text-left border border-indigo-400/20">
+                    <div class="text-[9px] font-black tracking-[0.3em] text-slate-300 uppercase">Mode</div>
+                    <div class="mt-1 text-lg font-black">PvC</div>
+                    <div class="mt-1 text-[11px] font-bold text-slate-200/90">玩家 vs 電腦（玩家先手）</div>
+                </button>
+            </div>
+
+            <div class="mt-6 flex items-center justify-center gap-3">
+                <button id="rulesBtn" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">規則</button>
+            </div>
+        </div>
+    `;
+
+    (wrap.querySelector('#modePvp') as HTMLButtonElement).onclick = () => startPvpGame();
+    (wrap.querySelector('#modeCvp') as HTMLButtonElement).onclick = () => startCvpGame();
+    (wrap.querySelector('#modePvc') as HTMLButtonElement).onclick = () => startPvcGame();
+    (wrap.querySelector('#rulesBtn') as HTMLButtonElement).onclick = () => showRules();
+    return wrap;
+}
+
+function renderRulesScreen() {
+    const wrap = document.createElement('div');
+    wrap.className = 'min-h-screen w-full bg-[#0b1220] text-white font-sans p-6';
+
+    wrap.innerHTML = `
+        <div class="mx-auto w-full max-w-3xl">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-[10px] font-black tracking-[0.4em] text-indigo-200 uppercase">PIXEL DUEL</div>
+                    <div class="mt-1 text-3xl font-black">規則說明</div>
+                </div>
+                <button id="backHome" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">返回首頁</button>
+            </div>
+
+            <div class="mt-6 space-y-4 text-slate-200/90">
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">流程</div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>出牌階段：從手牌打出到三個區域（每回合最多 3 張）。</li>
+                        <li>擲骰階段：依本回合出牌數決定擲骰數量。</li>
+                        <li>判定/防禦/傷害/攻擊/購買：依 UI 指示進行。</li>
+                    </ul>
+                </div>
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">提示</div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>桌機可滑鼠移入卡牌查看 tooltip；手機可長按卡牌查看。</li>
+                        <li>卡牌大小：到 src/main.ts 調整 getCardFrameStyleVars / getMobileCardFrameStyleVars。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    `;
+
+    (wrap.querySelector('#backHome') as HTMLButtonElement).onclick = () => goHome();
+    return wrap;
+}
 
 function drawFromDeck() {
     if (deck.length === 0) return null;
@@ -408,6 +656,502 @@ function addLog(msg) {
     console.log(msg); // Ensure logs appear in AI Studio's log viewer
     gameLog.push(msg);
     if (gameLog.length > 30) gameLog.shift(); // Keep more history
+}
+
+// --- Computer AI (uniform random) ---
+
+let computerBusy = false;
+
+// AI speed control:
+// - 1.0 = default speed
+// - 2.0 = 2x faster (half the delay)
+// - 0.5 = half speed (double the delay)
+let aiSpeed = 0.7;
+
+function randInt(minInclusive: number, maxInclusive: number) {
+    return Math.floor(Math.random() * (maxInclusive - minInclusive + 1)) + minInclusive;
+}
+
+function chooseUniform<T>(arr: T[]): T {
+    return arr[randInt(0, arr.length - 1)];
+}
+
+function sleep(ms: number) {
+    const safe = Math.max(0, Math.round(ms));
+    const scaled = Math.max(0, Math.round(safe / Math.max(0.1, aiSpeed)));
+    return new Promise<void>((resolve) => setTimeout(resolve, scaled));
+}
+
+function isAnySelectionModeActive() {
+    return luckySelectionMode || fateSelectionMode || evasionSelectionMode || illusionSelectionMode || frostSelectionMode || chargeSelectionMode || reproductionSelectionMode || flareSelectionMode;
+}
+
+function getAiName() {
+    const idx = getComputerPlayerIndexForMode(selectedMode);
+    if (idx === null) return 'AI';
+    return players[idx].name || 'AI';
+}
+
+function logAi(msg: string) {
+    addLog(`[AI] ${msg}`);
+}
+
+function listOpponentDodgeTargets() {
+    const opp = getOpponent();
+    const targets: Array<{areaIdx: number; hitIdx: number; val: number}> = [];
+    for (let aIdx = 0; aIdx < 3; aIdx++) {
+        const hits = opp.attackQueue[aIdx] || [];
+        hits.forEach((v, hitIdx) => {
+            if (v > 0) targets.push({areaIdx: aIdx, hitIdx, val: v});
+        });
+    }
+    return targets;
+}
+
+function listSelfAttackHitTargets() {
+    const p = getCurrentPlayer();
+    const targets: Array<{areaIdx: number; hitIdx: number; val: number}> = [];
+    for (let aIdx = 0; aIdx < 3; aIdx++) {
+        const hits = p.currentAttacks[aIdx] || [];
+        hits.forEach((v, hitIdx) => {
+            if (v > 0) targets.push({areaIdx: aIdx, hitIdx, val: v});
+        });
+    }
+    return targets;
+}
+
+function getAvailableActivationsForCurrentPlayer() {
+    // Return list of "thunks" that, when called, will start an activation.
+    // Some activations will open selection modes; AI will then resolve targets in subsequent steps.
+    const p = getCurrentPlayer();
+    const acts: Array<{label: string; run: () => void}> = [];
+    const mirageBlocked = isMirageActive();
+
+    // Phase 1: after roll you might use Frost/Fate. (Fate function itself supports phase 1)
+    if (currentPhaseIndex === 1 && diceResults.length > 0) {
+        // Fate
+        for (let aIdx = 0; aIdx < 3; aIdx++) {
+            if (getEffectiveEffectId(p, aIdx) === 'fate' && !p.fateUsedIndices.includes(aIdx) && !luckySelectionMode) {
+                acts.push({label: `命運(區域${aIdx + 1})`, run: () => useFate(aIdx)});
+            }
+            if (getEffectiveEffectId(p, aIdx) === 'frost' && !p.frostUsedIndices.includes(aIdx) && !luckySelectionMode) {
+                acts.push({label: `冰霜(區域${aIdx + 1})`, run: () => useFrost(aIdx)});
+            }
+        }
+    }
+
+    // Phase 2: judging activations
+    if (currentPhaseIndex === 2) {
+        for (let aIdx = 0; aIdx < 3; aIdx++) {
+            const eff = getEffectiveEffectId(p, aIdx);
+            if (eff === 'fate' && !p.fateUsedIndices.includes(aIdx) && diceResults.length > 0 && !luckySelectionMode) {
+                acts.push({label: `命運(區域${aIdx + 1})`, run: () => useFate(aIdx)});
+            }
+            if (eff === 'magic_luck' && !p.magicLuckUsedIndices.includes(aIdx) && p.magic >= 2 && !mirageBlocked) {
+                acts.push({label: `魔運(區域${aIdx + 1})`, run: () => useMagicLuck(aIdx)});
+            }
+            if (p.activeAreaEffects[aIdx]?.effectId === 'illusion' && !p.illusionUsedIndices.includes(aIdx) && p.magic >= 1 && !mirageBlocked) {
+                const opp = getOpponent();
+                const hasCopyableCard = opp.activeAreaEffects.some(c => c && c.effectId !== 'lucky' && c.effectId !== 'fate');
+                if (hasCopyableCard) acts.push({label: `幻象幽影(區域${aIdx + 1})`, run: () => useIllusion(aIdx)});
+            }
+        }
+    }
+
+    // Phase 3: defense activations
+    if (currentPhaseIndex === 3) {
+        const oppTargets = listOpponentDodgeTargets();
+        for (let aIdx = 0; aIdx < 3; aIdx++) {
+            const eff = getEffectiveEffectId(p, aIdx);
+            if (eff === 'dodge' && !p.evasionUsedIndices.includes(aIdx) && p.magic >= 3 && oppTargets.length > 0 && !mirageBlocked) {
+                acts.push({label: `閃避(區域${aIdx + 1})`, run: () => useEvasion(aIdx)});
+            }
+            if (eff === 'shield' && p.magic >= 2 && !mirageBlocked) {
+                acts.push({label: `護盾(區域${aIdx + 1})`, run: () => useShield(aIdx)});
+            }
+            if (eff === 'barrier' && !p.barrierUsedIndices.includes(aIdx) && p.magic >= 3 && !mirageBlocked) {
+                acts.push({label: `屏障(區域${aIdx + 1})`, run: () => useBarrier(aIdx)});
+            }
+        }
+    }
+
+    // Phase 5: attack activations
+    if (currentPhaseIndex === 5) {
+        const selfTargets = listSelfAttackHitTargets();
+        for (let aIdx = 0; aIdx < 3; aIdx++) {
+            const eff = getEffectiveEffectId(p, aIdx);
+            if (eff === 'amplify' && !p.amplifyUsedIndices.includes(aIdx)) {
+                acts.push({label: `增幅(區域${aIdx + 1})`, run: () => useAmplify(aIdx)});
+            }
+            if (eff === 'magic_bullet' && p.magic >= 1 && !mirageBlocked) {
+                acts.push({label: `魔彈(區域${aIdx + 1})`, run: () => useMagicBullet(aIdx)});
+            }
+            if (eff === 'thrust' && !p.thrustUsedIndices.includes(aIdx) && hasAnyThrustTarget(p)) {
+                acts.push({label: `突刺(區域${aIdx + 1})`, run: () => useThrust(aIdx)});
+            }
+            if (eff === 'forest' && !p.forestUsedIndices.includes(aIdx) && p.magic >= 3 && !mirageBlocked) {
+                acts.push({label: `森林(區域${aIdx + 1})`, run: () => useForest(aIdx)});
+            }
+            if (eff === 'charge' && !p.chargeUsedIndices.includes(aIdx) && p.magic >= 2 && selfTargets.length > 0 && !mirageBlocked) {
+                acts.push({label: `充能(區域${aIdx + 1})`, run: () => useCharge(aIdx)});
+            }
+            if (eff === 'reproduction' && !p.reproductionUsedIndices.includes(aIdx) && p.magic >= 2 && selfTargets.length > 0 && !mirageBlocked) {
+                acts.push({label: `再現(區域${aIdx + 1})`, run: () => useReproduction(aIdx)});
+            }
+            if (eff === 'flare' && !p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && selfTargets.length > 0 && !mirageBlocked) {
+                acts.push({label: `閃光(區域${aIdx + 1})`, run: () => useFlare(aIdx)});
+            }
+            // Holy Light / Soul Snatch (valid phases include 5)
+            if (eff === 'holy_light' && p.magic >= 2 && !mirageBlocked) {
+                acts.push({label: `聖光(區域${aIdx + 1})`, run: () => useHolyLight(aIdx)});
+            }
+            if (eff === 'soul_snatch' && p.magic >= 3 && !mirageBlocked) {
+                acts.push({label: `奪魂(區域${aIdx + 1})`, run: () => useSoulSnatch(aIdx)});
+            }
+        }
+    }
+
+    // Phase 4: damage (holy light / soul snatch are valid)
+    if (currentPhaseIndex === 4) {
+        for (let aIdx = 0; aIdx < 3; aIdx++) {
+            const eff = getEffectiveEffectId(p, aIdx);
+            if (eff === 'holy_light' && p.magic >= 2 && !mirageBlocked) {
+                acts.push({label: `聖光(區域${aIdx + 1})`, run: () => useHolyLight(aIdx)});
+            }
+            if (eff === 'soul_snatch' && p.magic >= 3 && !mirageBlocked) {
+                acts.push({label: `奪魂(區域${aIdx + 1})`, run: () => useSoulSnatch(aIdx)});
+            }
+        }
+    }
+
+    return acts;
+}
+
+async function aiResolveSelectionModesStep() {
+    // Resolve any active selection mode with uniform random target.
+    // Returns true if it performed an action.
+
+    // Lucky: choose a die to remove
+    if (luckySelectionMode && diceResults.length > 0) {
+        const idx = randInt(0, diceResults.length - 1);
+        logAi(`${getAiName()} 觸發幸運：隨機移除骰子 #${idx + 1}(${diceResults[idx]})`);
+        await sleep(randInt(350, 650));
+        removeLuckyDie(idx);
+        return true;
+    }
+
+    // Fate: choose k dice to reroll, then confirm
+    if (fateSelectionMode && diceResults.length > 0) {
+        const n = diceResults.length;
+        const k = randInt(1, n);
+        const indices = Array.from({length: n}, (_, i) => i);
+        // Fisher-Yates shuffle for uniform subset sampling (approx by k)
+        for (let i = indices.length - 1; i > 0; i--) {
+            const j = randInt(0, i);
+            [indices[i], indices[j]] = [indices[j], indices[i]];
+        }
+        const chosen = indices.slice(0, k);
+        logAi(`${getAiName()} 使用命運：隨機選 ${k}/${n} 顆骰子重擲（#${chosen.map(i => i + 1).join(',')}）`);
+        await sleep(randInt(350, 650));
+        chosen.forEach(i => toggleDiceIndexSelection(i));
+        await sleep(randInt(250, 450));
+        confirmFate();
+        return true;
+    }
+
+    // Evasion: pick one opponent attack hit
+    if (evasionSelectionMode) {
+        const targets = listOpponentDodgeTargets();
+        if (targets.length > 0) {
+            const t = chooseUniform(targets);
+            logAi(`${getAiName()} 使用閃避：無視對手區域${t.areaIdx + 1} 的攻擊(${t.val})`);
+            await sleep(randInt(350, 650));
+            targetEvasion(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        // no valid target, cancel mode defensively
+        evasionSelectionMode = false;
+        return false;
+    }
+
+    // Illusion: pick one opponent active effect card (not lucky/fate)
+    if (illusionSelectionMode) {
+        const opp = getOpponent();
+        const candidates: number[] = [];
+        opp.activeAreaEffects.forEach((c, aIdx) => {
+            if (!c) return;
+            if (c.effectId === 'lucky' || c.effectId === 'fate') return;
+            candidates.push(aIdx);
+        });
+        if (candidates.length > 0) {
+            const aIdx = chooseUniform(candidates);
+            const name = opp.activeAreaEffects[aIdx]?.effectName || '未知';
+            logAi(`${getAiName()} 幻象幽影：複製對手區域${aIdx + 1}「${name}」`);
+            await sleep(randInt(350, 650));
+            targetIllusion(aIdx);
+            return true;
+        }
+        illusionSelectionMode = false;
+        return false;
+    }
+
+    // Frost: discard one die
+    if (frostSelectionMode && diceResults.length > 0) {
+        const idx = randInt(0, diceResults.length - 1);
+        logAi(`${getAiName()} 使用冰霜：捨棄骰子 #${idx + 1}(${diceResults[idx]})`);
+        await sleep(randInt(350, 650));
+        targetFrost(idx);
+        return true;
+    }
+
+    // Charge: choose one of self attacks
+    if (chargeSelectionMode) {
+        const targets = listSelfAttackHitTargets();
+        if (targets.length > 0) {
+            const t = chooseUniform(targets);
+            logAi(`${getAiName()} 充能：強化區域${t.areaIdx + 1} 攻擊(${t.val})`);
+            await sleep(randInt(350, 650));
+            useCharge(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        chargeSelectionMode = false;
+        return false;
+    }
+
+    // Reproduction: choose one of self attacks
+    if (reproductionSelectionMode) {
+        const targets = listSelfAttackHitTargets();
+        if (targets.length > 0) {
+            const t = chooseUniform(targets);
+            logAi(`${getAiName()} 再現：複製區域${t.areaIdx + 1} 攻擊(${t.val})`);
+            await sleep(randInt(350, 650));
+            targetReproduction(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        reproductionSelectionMode = false;
+        return false;
+    }
+
+    // Flare: choose one of self attacks
+    if (flareSelectionMode) {
+        const targets = listSelfAttackHitTargets();
+        if (targets.length > 0) {
+            const t = chooseUniform(targets);
+            logAi(`${getAiName()} 閃光：翻倍區域${t.areaIdx + 1} 攻擊(${t.val})`);
+            await sleep(randInt(350, 650));
+            targetFlare(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        flareSelectionMode = false;
+        return false;
+    }
+
+    return false;
+}
+
+async function aiActivationLoopStep() {
+    // If there are any available activations, 90% chance to activate ONE.
+    const acts = getAvailableActivationsForCurrentPlayer();
+    if (acts.length === 0) return false;
+    if (Math.random() > 0.9) {
+        logAi(`${getAiName()} 放棄發動效果（10%）`);
+        await sleep(randInt(250, 450));
+        return false;
+    }
+    const act = chooseUniform(acts);
+    logAi(`${getAiName()} 發動效果：${act.label}`);
+    await sleep(randInt(350, 700));
+    act.run();
+    return true;
+}
+
+async function aiDoPlayPhase() {
+    const p = getCurrentPlayer();
+    if (currentPhaseIndex !== 0) return;
+
+    // Preparation: only player 1 can play exactly one card.
+    const maxPlays = inPreparationPhase ? 1 : Math.min(3, p.hand.length);
+
+    // Must play at least 1 if has hand
+    if (p.hand.length === 0) {
+        logAi(`${getAiName()} 無手牌，結束出牌`);
+        await sleep(randInt(250, 450));
+        nextPhase();
+        return;
+    }
+
+    const minPlays = 1;
+    const playCount = randInt(minPlays, maxPlays);
+    logAi(`${getAiName()} 出牌：隨機打出 ${playCount} 張`);
+    await sleep(randInt(350, 650));
+
+    for (let i = 0; i < playCount; i++) {
+        if (p.hand.length === 0) break;
+        // choose random hand index
+        const hIdx = randInt(0, p.hand.length - 1);
+        const cardName = p.hand[hIdx]?.effectName || '未知';
+        const areaIdx = randInt(0, 2);
+        selectedHandCardIndex = hIdx;
+        logAi(`${getAiName()} 打出「${cardName}」→ 區域${areaIdx + 1}`);
+        await sleep(randInt(350, 650));
+        playToBoard(areaIdx);
+        await sleep(randInt(200, 450));
+        if (inPreparationPhase) break;
+    }
+
+    // In preparation: after one play, press start
+    if (inPreparationPhase && players[1].cardsPlayedThisTurn >= 1) {
+        logAi(`${getAiName()} 準備完成：開始遊戲`);
+        await sleep(randInt(350, 650));
+        finishPreparationPhase();
+        return;
+    }
+
+    await sleep(randInt(250, 450));
+    nextPhase();
+}
+
+async function aiDoRollPhase() {
+    if (currentPhaseIndex !== 1) return;
+    if (diceResults.length > 0) {
+        // Already rolled; go to judging
+        await sleep(randInt(250, 450));
+        nextPhase();
+        return;
+    }
+
+    const p = getCurrentPlayer();
+    const shouldRollFiveBecauseNoHand = p.hand.length === 0 && p.cardsPlayedThisTurn === 0;
+    const rollOptions = shouldRollFiveBecauseNoHand
+        ? [5]
+        : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
+    const count = chooseUniform(rollOptions);
+    logAi(`${getAiName()} 擲骰：${count} 顆`);
+    await sleep(randInt(350, 650));
+    rollDice(count);
+}
+
+async function aiDoBuyPhase() {
+    if (currentPhaseIndex !== 6) return;
+    const p = getCurrentPlayer();
+
+    // Must draw first free card if deck not empty
+    if (deck.length > 0 && buyDeckDrawCount < 1) {
+        logAi(`${getAiName()} 購買：先抽免費牌`);
+        await sleep(randInt(350, 650));
+        buyFromDeck();
+        return;
+    }
+
+    // Build action list: buy deck (if can), buy market slots (if can), or end
+    const actions: Array<{label: string; run: () => void}> = [];
+    const nextDrawIndex = buyDeckDrawCount + 1;
+    const nextDrawCost = getDeckDrawCost(nextDrawIndex);
+    const canDraw = deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost;
+    if (canDraw) actions.push({label: `抽牌庫(-${nextDrawCost}金)`, run: () => buyFromDeck()});
+
+    // market slots indices 0..2
+    ([0, 1, 2] as const).forEach((idx) => {
+        const c = market[idx];
+        if (!c) return;
+        const price = getMarketPrice(idx);
+        if (p.gold < price) return;
+        actions.push({label: `買市場(價格${price})「${c.effectName}」`, run: () => buyMarketCard(idx)});
+    });
+
+    // Always allow end
+    actions.push({label: '結束回合', run: () => nextPhase()});
+
+    const chosen = chooseUniform(actions);
+    logAi(`${getAiName()} 購買決策：${chosen.label}`);
+    await sleep(randInt(350, 700));
+    chosen.run();
+}
+
+async function runComputerTurnLoop() {
+    if (computerBusy) return;
+    if (!isComputerTurnNow()) return;
+    if (winner) return;
+
+    computerBusy = true;
+    try {
+        // Keep acting while it's still computer's turn.
+        // Hard cap to avoid infinite loops.
+        for (let step = 0; step < 200; step++) {
+            if (!isComputerTurnNow()) break;
+            if (winner) break;
+
+            // Resolve any pending selection mode first
+            const didResolve = await aiResolveSelectionModesStep();
+            if (didResolve) {
+                await sleep(randInt(150, 350));
+                continue;
+            }
+
+            // Try 90% activation once per loop
+            const didActivate = await aiActivationLoopStep();
+            if (didActivate) {
+                await sleep(randInt(150, 350));
+                continue;
+            }
+
+            // Phase default actions
+            if (inPreparationPhase) {
+                // only player 1 acts in prep phase; if computer is player 0 in CvP, they will just wait.
+                if (currentPlayerIndex === 1) {
+                    await aiDoPlayPhase();
+                    continue;
+                }
+                // If computer is player 0, prep belongs to player 1; do nothing.
+                break;
+            }
+
+            if (currentPhaseIndex === 0) {
+                await aiDoPlayPhase();
+                continue;
+            }
+            if (currentPhaseIndex === 1) {
+                await aiDoRollPhase();
+                await sleep(randInt(150, 350));
+                // lucky selection will be resolved in next loop
+                continue;
+            }
+            if (currentPhaseIndex === 2) {
+                logAi(`${getAiName()} 結束判定階段`);
+                await sleep(randInt(250, 450));
+                nextPhase();
+                continue;
+            }
+            if (currentPhaseIndex === 3) {
+                logAi(`${getAiName()} 結束防禦階段`);
+                await sleep(randInt(250, 450));
+                nextPhase();
+                continue;
+            }
+            if (currentPhaseIndex === 4) {
+                logAi(`${getAiName()} 結束傷害階段`);
+                await sleep(randInt(250, 450));
+                nextPhase();
+                continue;
+            }
+            if (currentPhaseIndex === 5) {
+                logAi(`${getAiName()} 結束攻擊階段`);
+                await sleep(randInt(250, 450));
+                nextPhase();
+                continue;
+            }
+            if (currentPhaseIndex === 6) {
+                await aiDoBuyPhase();
+                await sleep(randInt(150, 350));
+                continue;
+            }
+
+            // Fallback
+            break;
+        }
+    } finally {
+        computerBusy = false;
+    }
 }
 
 // --- Initialization ---
@@ -1250,6 +1994,11 @@ function useThrust(areaIdx) {
     }
 }
 
+function hasAnyThrustTarget(p: (typeof players)[number]) {
+    // Thrust only affects normal attacks with value 1~2
+    return p.currentAttacks.some(areaAtks => areaAtks.some(v => v > 0 && v <= 2));
+}
+
 function useForest(areaIdx) {
     if (currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
@@ -1290,7 +2039,7 @@ function useFrost(areaIdx) {
     const p = getCurrentPlayer();
     const card = p.activeAreaEffects[areaIdx];
 
-    if (card && card.effectId === 'frost') {
+    if (card && getEffectiveEffectId(p, areaIdx) === 'frost') {
         if (p.frostUsedIndices.includes(areaIdx)) {
             alert('這張冰霜卡本回合已使用過');
             return;
@@ -1412,13 +2161,15 @@ function renderWinModalOverlay() {
         <div class="px-5 py-4 text-center">
             <div class="text-[11px] font-bold text-slate-300">可查看最後場面</div>
             <div class="mt-4 flex gap-2">
-                <button id="restartBtn" class="flex-1 bg-indigo-600 text-white py-2.5 rounded-xl font-black text-[12px] tracking-widest uppercase shadow-lg shadow-indigo-900/30 active:scale-95">新遊戲</button>
+                <button id="againBtn" class="flex-1 bg-indigo-600 text-white py-2.5 rounded-xl font-black text-[12px] tracking-widest uppercase shadow-lg shadow-indigo-900/30 active:scale-95">再來一場</button>
+                <button id="homeBtn" class="flex-1 bg-slate-800 text-slate-100 py-2.5 rounded-xl font-black text-[12px] tracking-widest uppercase border border-slate-700 active:scale-95">回到首頁</button>
                 <button id="closeWinBtn" class="flex-1 bg-transparent text-slate-100 py-2.5 rounded-xl font-black text-[12px] tracking-widest uppercase border border-slate-600 active:scale-95">關閉</button>
             </div>
         </div>
     `;
 
-    (modal.querySelector('#restartBtn') as HTMLButtonElement).onclick = () => location.reload();
+    (modal.querySelector('#againBtn') as HTMLButtonElement).onclick = () => restartMatch();
+    (modal.querySelector('#homeBtn') as HTMLButtonElement).onclick = () => goHome();
     (modal.querySelector('#closeWinBtn') as HTMLButtonElement).onclick = () => {
         winModalDismissed = true;
         render();
@@ -1891,13 +2642,15 @@ function renderMobileTopBar(typeColors) {
     const right = document.createElement('div');
     right.className = 'flex items-center gap-2';
 
-    // Game over: show restart only
-    if (winner) {
+    // Game over: show go-home only (per requirement: 關閉後右上按鈕改成回到首頁)
+    if (winner && winModalDismissed) {
         const btn = document.createElement('button');
-        btn.className = 'bg-indigo-600 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
-        btn.innerText = '新遊戲';
-        btn.onclick = () => location.reload();
+        btn.className = 'bg-slate-900 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+        btn.innerText = '回到首頁';
+        btn.onclick = () => goHome();
         right.appendChild(btn);
+    } else if (winner) {
+        // Winner modal 未關閉時：右上不顯示任何操作（避免跟 modal 按鈕重複）
     } else
 
     if (inPreparationPhase) {
@@ -2322,7 +3075,8 @@ function renderMobilePlayerBlock(
                         }
                     } else if (currentPhaseIndex === 5 && effId === 'thrust') {
                         // Thrust: Double all 1s and 2s
-                        if (!p.thrustUsedIndices.includes(aIdx)) {
+                        const canThrust = hasAnyThrustTarget(p);
+                        if (!p.thrustUsedIndices.includes(aIdx) && canThrust) {
                             cardEl.classList.add('ring-2', 'ring-rose-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useThrust(aIdx); };
                         }
@@ -2530,6 +3284,16 @@ function render() {
     // rerender 時先關閉 tooltip（避免舊 tooltip 懸在畫面上）
     hideGlobalTooltip();
 
+    // --- App screens: Home / Rules / Game ---
+    if (appScreen === 'home') {
+        root.appendChild(renderHomeScreen());
+        return;
+    }
+    if (appScreen === 'rules') {
+        root.appendChild(renderRulesScreen());
+        return;
+    }
+
     const typeColors = {
         attack: 'bg-red-500',
         defense: 'bg-blue-500',
@@ -2576,6 +3340,11 @@ function render() {
             (modal.querySelector('#closeModal') as HTMLElement).onclick = toggleEffectList;
             overlay.appendChild(modal);
             root.appendChild(overlay);
+        }
+
+        // Schedule AI after DOM is updated
+        if (isComputerTurnNow() && !computerBusy) {
+            queueMicrotask(() => void runComputerTurnLoop());
         }
         return;
     }
@@ -2657,12 +3426,14 @@ function render() {
     actionContainer.className = 'flex items-center gap-2';
 
     // One-time Preparation Phase action
-    if (winner) {
+    if (winner && winModalDismissed) {
         const btn = document.createElement('button');
-        btn.className = 'px-6 py-2 rounded-lg font-black text-xs uppercase tracking-widest transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-500 active:scale-95';
-        btn.innerHTML = '開始新遊戲 &rarr;';
-        btn.onclick = () => location.reload();
+        btn.className = 'px-6 py-2 rounded-lg font-black text-xs uppercase tracking-widest transition-all bg-slate-900 text-white shadow-lg shadow-slate-200 hover:bg-slate-800 active:scale-95';
+        btn.innerHTML = '回到首頁 &rarr;';
+        btn.onclick = () => goHome();
         actionContainer.appendChild(btn);
+    } else if (winner) {
+        // Winner modal 未關閉時不顯示右側 action（以 modal 為主）
     } else if (inPreparationPhase) {
         const btn = document.createElement('button');
         const prepDone = players[1].cardsPlayedThisTurn >= 1;
@@ -2784,6 +3555,11 @@ function render() {
         (modal.querySelector('#closeModalBtn') as HTMLElement).onclick = toggleEffectList;
         overlay.appendChild(modal);
         root.appendChild(overlay);
+    }
+
+    // Schedule AI after DOM is updated
+    if (isComputerTurnNow() && !computerBusy) {
+        queueMicrotask(() => void runComputerTurnLoop());
     }
 }
 
@@ -3081,7 +3857,8 @@ function renderPlayerArea(idx: 0 | 1) {
                 }
             } else if (currentPhaseIndex === 5 && effId === 'thrust') {
                 // Thrust: Double all 1s and 2s
-                if (!p.thrustUsedIndices.includes(aIdx)) {
+                const canThrust = hasAnyThrustTarget(p);
+                if (!p.thrustUsedIndices.includes(aIdx) && canThrust) {
                     cardEl.classList.add('ring-2', 'ring-rose-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useThrust(aIdx); };
                 }
@@ -3215,8 +3992,8 @@ function renderPlayerArea(idx: 0 | 1) {
     return area;
 }
 
-// --- Start Game ---
-initGame();
+// --- App Start ---
+// Default: Home screen. Click PvP to start a match (will call initGame()).
 render();
 
 // 讓 responsive 模式縮放視窗時可以即時切換 mobile/desktop layout
