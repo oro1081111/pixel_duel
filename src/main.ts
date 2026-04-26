@@ -7,6 +7,55 @@ import './index.css';
 
 import {CARD_DEFS, EFFECTS, type CardAttr} from './cards';
 
+function getBaseUrl() {
+    // Vite sets BASE_URL for GitHub Pages deployments (repo sub-path)
+    const base = (import.meta as any)?.env?.BASE_URL as string | undefined;
+    return base || '/';
+}
+
+function joinUrl(base: string, path: string) {
+    const b = base.endsWith('/') ? base : `${base}/`;
+    const p = path.startsWith('/') ? path.slice(1) : path;
+    return `${b}${p}`;
+}
+
+function getCardPngFileName(imgNo: number) {
+    // Use the required naming: pixel_duel-01.png, pixel_duel-02.png, ...
+    const n = Math.max(0, Math.floor(imgNo));
+    return `pixel_duel-${String(n).padStart(2, '0')}.png`;
+}
+
+function getCardPngUrlByImgNo(imgNo: number) {
+    // IMPORTANT:
+    // - This project uses Vite `base: '/pixel_duel/'` for GitHub Pages.
+    // - In dev/prod, using an absolute path like `/cards/...` may bypass the base and 404.
+    // - Using a RELATIVE path keeps it working under both `/` and `/pixel_duel/`.
+    return `cards/${getCardPngFileName(imgNo)}`;
+}
+
+function getImgNoForEffectId(effectId: string) {
+    const def = CARD_DEFS.find(d => d.effectId === effectId);
+    return def?.imgNo ?? 0;
+}
+
+function renderCardPngHTML(effectId: string, alt: string) {
+    const imgNo = getImgNoForEffectId(effectId);
+    const src = getCardPngUrlByImgNo(imgNo);
+    return `
+        <div class="w-full h-full p-0.1">
+            <div class="w-full h-full rounded-md overflow-hidden bg-white">
+                <img
+                    src="${src}"
+                    alt="${alt}"
+                    class="w-full h-full object-contain select-none"
+                    draggable="false"
+                    loading="lazy"
+                />
+            </div>
+        </div>
+    `;
+}
+
 // --- Constants & Data ---
 
 type GameCard = {
@@ -2510,7 +2559,7 @@ function renderMarketPanel(typeColors) {
         cardEl.setAttribute('style', getCardFrameStyleVars('market'));
 
         if (c) {
-            cardEl.innerHTML = renderCardContentHTML(c, typeColors, {showTooltip: true});
+            cardEl.innerHTML = renderCardPngHTML(c.effectId, c.effectName);
             // 市場卡也用 portal tooltip，避免被右側面板的 overflow 裁切
             attachCardTooltip(cardEl, {title: c.effectName, desc: c.effectDesc});
             if (canBuy) {
@@ -2597,7 +2646,9 @@ function playToBoard(areaIdx) {
     if (inPreparationPhase) {
         if (currentPlayerIndex !== 1) return;
         if (p.cardsPlayedThisTurn >= 1) {
-            alert('準備階段只能打出 1 張牌');
+            // Don't use modal/alert; show it in the top hint area instead.
+            phaseHint = '準備階段只能打出 1 張牌';
+            render();
             return;
         }
     }
@@ -2751,13 +2802,13 @@ function setMobileDockTab(tab: 'hand' | 'market') {
 
 function getMobileCardFrameStyleVars(size: 'board' | 'hand' | 'market') {
     if (size === 'board') {
-        return '--card-w: 90px; --card-h: 120px; --header-h: 23px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
+        return '--card-w: 90px; --card-h: 135px; --header-h: 23px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
     }
     if (size === 'hand') {
-        return '--card-w: 72px; --card-h: 100px; --header-h: 20px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
+        return '--card-w: 72px; --card-h: 105px; --header-h: 20px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
     }
     // market
-    return '--card-w: 72px; --card-h: 100px; --header-h: 20px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
+    return '--card-w: 72px; --card-h: 105px; --header-h: 20px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
 }
 
 function renderMobileTopBar(typeColors) {
@@ -2931,7 +2982,7 @@ function renderMobileMarketRow(typeColors) {
         cardEl.className = `card-frame shadow-sm group relative ${canBuy ? 'cursor-pointer' : (c ? 'opacity-60' : 'opacity-30')}`;
         cardEl.setAttribute('style', getMobileCardFrameStyleVars('market'));
         if (c) {
-            cardEl.innerHTML = renderCardContentHTML(c, typeColors, {showTooltip: true});
+            cardEl.innerHTML = renderCardPngHTML(c.effectId, c.effectName);
             attachCardTooltip(cardEl, {title: c.effectName, desc: c.effectDesc});
             if (canBuy) {
                 // ring 稍微細一點，避免佔用太多空間
@@ -2965,7 +3016,10 @@ function renderMobilePlayerBlock(
     const isCurrent = currentPlayerIndex === idx;
 
     const wrap = document.createElement('div');
-    wrap.className = `px-3 py-2 ${position === 'top' ? 'bg-white' : 'bg-[#fafbfc]'} shrink-0`;
+    // Player background: 先手(玩家0)=淡紅、後手(玩家1)=淡藍
+    // (不要依 top/bottom 決定，因為 mobile 版 top 可能是對手)
+    void position;
+    wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-rose-100/100' : 'bg-blue-100/100'} shrink-0`;
 
     // compact header
     const header = document.createElement('div');
@@ -3147,7 +3201,7 @@ function renderMobilePlayerBlock(
                 const effId = isActiveEffect ? getEffectiveEffectId(p, aIdx) : card.effectId;
                 cardEl.className = `card-frame shadow-sm group absolute left-1/2 -translate-x-1/2 transition-all duration-300 overflow-visible ${isTop ? 'z-10' : 'z-0'} hover:z-[100]`;
                 cardEl.setAttribute('style', getMobileCardFrameStyleVars('board'));
-                cardEl.style.top = `${cIdx * 20}px`;
+                cardEl.style.top = `${cIdx * 30}px`;
 
                 if (p.contractTriggeredAreaIdx === aIdx && isActiveEffect) cardEl.classList.add('ring-2', 'ring-red-500', 'z-50');
                 if (effId === 'breakthrough' && isActiveEffect && p.hp <= 3) cardEl.classList.add('ring-2', 'ring-cyan-400', 'z-40');
@@ -3166,7 +3220,7 @@ function renderMobilePlayerBlock(
                     return copiedName ? `幻象幽影\n${copiedName}` : '幻象幽影';
                 })();
                 const nameForUI = (isTop && isActiveEffect) ? displayEffectName : card.effectName;
-                cardEl.innerHTML = renderCardContentHTML({...card, effectName: nameForUI}, typeColors, {showTooltip: isTop && isActiveEffect});
+                cardEl.innerHTML = renderCardPngHTML(card.effectId, nameForUI);
                 if (isTop && isActiveEffect) {
                     let tooltipDesc = card.effectDesc;
                     if (card.effectId === 'illusion' && p.illusionCopiedEffectIds[aIdx]) {
@@ -3396,7 +3450,9 @@ function renderMobileHandDrawer(typeColors) {
             // 手牌超過一定數量時：維持卡牌寬度，不縮小，改用左右滑動查看
             // Use items-center + overflow-y-visible so rings/glow won't be clipped,
             // and keep the row vertically centered within the fixed dock height.
-            list.className = 'flex items-center gap-3 overflow-x-auto overflow-y-visible w-full py-3';
+            // Add horizontal padding so the first/last card's ring/glow won't be clipped
+            // by the scroll container edge.
+            list.className = 'flex items-center gap-3 overflow-x-auto overflow-y-visible w-full py-3 px-3';
             list.id = 'mobile-hand-list';
             list.scrollLeft = mobileHandScrollLeft;
             list.addEventListener('scroll', () => {
@@ -3409,7 +3465,7 @@ function renderMobileHandDrawer(typeColors) {
                 // shrink-0：避免被 flex 壓縮，確保可左右滑動
                 cardEl.className = `card-frame shrink-0 shadow-sm group relative transition-all ${currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : ''}`;
                 cardEl.setAttribute('style', getMobileCardFrameStyleVars('hand'));
-                cardEl.innerHTML = renderCardContentHTML(card, typeColors, {showTooltip: true});
+                cardEl.innerHTML = renderCardPngHTML(card.effectId, card.effectName);
                 attachCardTooltip(cardEl, {title: card.effectName, desc: card.effectDesc});
                 if (currentPhaseIndex === 0) cardEl.onclick = () => selectHandCard(hIdx);
                 list.appendChild(cardEl);
@@ -3503,7 +3559,7 @@ function render() {
                     <button id="closeModal" class="text-slate-400 hover:text-slate-600 transition-colors p-1">×</button>
                 </div>
                 <div class="overflow-y-auto p-3 flex flex-col gap-2 bg-slate-50/30">
-                    ${CARD_DEFS.map(def => `
+                    ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => `
                         <div class="p-3 bg-white rounded-xl border border-slate-100 shadow-sm">
                             <div class="flex items-center justify-between gap-2 mb-0.5">
                                 <div class="text-indigo-600 font-extrabold text-sm">${def.name}</div>
@@ -3512,6 +3568,7 @@ function render() {
                                     <span class="card-frame-chip ${typeColors[def.right.type]}" style="--chip: 16px; --chip-font: 8px;">${def.right.value}</span>
                                 </div>
                             </div>
+                            <div class="text-[10px] font-black text-slate-400 tracking-wider">PNG：${getCardPngFileName(def.imgNo)}</div>
                             <div class="text-slate-600 text-[11px] font-bold leading-relaxed">${def.desc}</div>
                         </div>
                     `).join('')}
@@ -3716,7 +3773,7 @@ function render() {
                 </button>
             </div>
             <div class="overflow-y-auto p-4 flex flex-col gap-2 bg-slate-50/30">
-                ${CARD_DEFS.map(def => `
+                ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => `
                     <div class="p-3 bg-white rounded-xl border border-slate-100 shadow-sm hover:border-indigo-100 transition-colors">
                         <div class="flex items-center justify-between gap-2 mb-0.5">
                             <div class="text-indigo-600 font-extrabold text-sm">${def.name}</div>
@@ -3725,6 +3782,7 @@ function render() {
                                 <span class="card-frame-chip ${typeColors[def.right.type]}" style="--chip: 16px; --chip-font: 8px;">${def.right.value}</span>
                             </div>
                         </div>
+                        <div class="text-[10px] font-black text-slate-400 tracking-wider">PNG：${getCardPngFileName(def.imgNo)}</div>
                         <div class="text-slate-600 text-[11px] font-bold leading-relaxed">${def.desc}</div>
                     </div>
                 `).join('')}
@@ -3755,7 +3813,8 @@ function renderPlayerArea(idx: 0 | 1) {
     const area = document.createElement('div');
     // Horizontal structure: [Stats & Queue] [Board] [Hand]
     // 右側手牌欄加寬一點（但不改中間場地三區本來的排版邏輯）
-    area.className = `px-8 py-4 grid grid-cols-[200px_1fr_300px] gap-6 ${idx === 1 ? 'bg-white' : 'bg-[#fafbfc]'} relative transition-all duration-300 overflow-hidden`;
+    // Player background: 先手(玩家0)=淡紅、後手(玩家1)=淡藍
+    area.className = `px-8 py-4 grid grid-cols-[200px_1fr_300px] gap-6 ${idx === 0 ? 'bg-rose-50/75' : 'bg-sky-50/75'} relative transition-all duration-300 overflow-hidden`;
     
     // 1. Column: Stats & Next Turn Preview
     const leftCol = document.createElement('div');
@@ -3921,7 +3980,7 @@ function renderPlayerArea(idx: 0 | 1) {
         cardEl.className = `card-frame shadow-sm group absolute left-1/2 -translate-x-1/2 transition-all duration-300 overflow-visible ${isTop ? 'z-10' : 'z-0'} hover:z-[100]`;
         cardEl.setAttribute('style', getCardFrameStyleVars('board'));
         // 堆疊間距要 >= header 高度，避免上層卡遮住下層的屬性圓點
-        cardEl.style.top = `${cIdx * 22}px`;
+        cardEl.style.top = `${cIdx * 30}px`;
         
         // Contract high-light
         if (p.contractTriggeredAreaIdx === aIdx && isActiveEffect) {
@@ -3971,11 +4030,7 @@ function renderPlayerArea(idx: 0 | 1) {
 
         // 被覆蓋的卡牌：名稱也要保留；tooltip 只給最上層生效卡（避免互相遮擋）
         const nameForUI = (isTop && isActiveEffect) ? displayEffectName : card.effectName;
-        cardEl.innerHTML = renderCardContentHTML(
-            {...card, effectName: nameForUI},
-            typeColors,
-            {showTooltip: isTop && isActiveEffect}
-        );
+        cardEl.innerHTML = renderCardPngHTML(card.effectId, nameForUI);
 
         // Tooltip（只給最上層生效卡，避免堆疊互相遮擋）
         if (isTop && isActiveEffect) {
@@ -4160,7 +4215,9 @@ function renderPlayerArea(idx: 0 | 1) {
     // 手牌：永遠固定「上下兩排」，並採用 column-major 順序：先上→下填滿一欄，再往右開新欄。
     // 改用 CSS Grid（rows=2 + grid-flow-col），避免 flex-wrap 在出現 scrollbar 後高度不足導致掉成 1 排。
     // 註：h 需要包含 2 張牌高度 + gap + padding + scrollbar 高度 buffer。
-    handWrap.className = 'w-full grid grid-rows-2 grid-flow-col auto-cols-max gap-3 h-[220px] overflow-x-auto overflow-y-hidden p-2 content-start justify-center';
+    // Use extra horizontal padding so the left-most card's ring/glow isn't clipped
+    // by the scroll container edge.
+    handWrap.className = 'w-full grid grid-rows-2 grid-flow-col auto-cols-max gap-3 h-[220px] overflow-x-auto overflow-y-visible px-4 py-2 content-start justify-center';
     handWrap.id = `desktop-hand-wrap-${idx}`;
     handWrap.scrollLeft = desktopHandScrollLeft[idx];
     // 捲動時也先關掉 tooltip（避免滑鼠停在卡上時拖曳捲動造成 tooltip 殘留）
@@ -4174,7 +4231,7 @@ function renderPlayerArea(idx: 0 | 1) {
 
         cardEl.className = `card-frame shadow-sm group relative transition-all ${isCurrent && currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : 'hover:-translate-y-1 hover:border-slate-400'}`;
         cardEl.setAttribute('style', getCardFrameStyleVars('hand'));
-        cardEl.innerHTML = renderCardContentHTML(card, typeColors, {showTooltip: true});
+        cardEl.innerHTML = renderCardPngHTML(card.effectId, card.effectName);
         attachCardTooltip(cardEl, {title: card.effectName, desc: card.effectDesc});
         if (isCurrent && currentPhaseIndex === 0) {
             cardEl.onclick = () => selectHandCard(hIdx);

@@ -72,7 +72,8 @@ body {
   /* 注意：不要在這裡設定 shadow，否則會覆蓋 tailwind 的 ring(發光) box-shadow */
   /* 統一把 ring 的顏色「淡一點」 */
   --tw-ring-opacity: 0.35;
-  @apply bg-white border-2 border-slate-200 rounded-xl flex flex-col overflow-visible transition-all;
+  /* 圓角稍小一點，並把內容裁切在卡框內（PNG 不會溢出圓角） */
+  @apply bg-white border-2 border-slate-200 rounded-lg flex flex-col overflow-hidden transition-all;
 }
 
 .card-frame-header {
