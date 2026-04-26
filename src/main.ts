@@ -64,6 +64,27 @@ function hideGlobalTooltip() {
     el.classList.add('hidden');
 }
 
+function scheduleRestoreHandScrollPositions() {
+    // Because this app fully re-creates DOM on each render(),
+    // setting scrollLeft during element creation may be overridden by layout.
+    // Restore it after mount (and once more in the next frame for safety).
+    const restoreOnce = () => {
+        const mobile = document.getElementById('mobile-hand-list');
+        if (mobile) (mobile as HTMLDivElement).scrollLeft = mobileHandScrollLeft;
+
+        const d0 = document.getElementById('desktop-hand-wrap-0');
+        if (d0) (d0 as HTMLDivElement).scrollLeft = desktopHandScrollLeft[0];
+
+        const d1 = document.getElementById('desktop-hand-wrap-1');
+        if (d1) (d1 as HTMLDivElement).scrollLeft = desktopHandScrollLeft[1];
+    };
+
+    requestAnimationFrame(() => {
+        restoreOnce();
+        requestAnimationFrame(restoreOnce);
+    });
+}
+
 function attachCardTooltip(
     cardEl: HTMLElement,
     {title, desc}: {title: string; desc: string}
@@ -225,6 +246,9 @@ let inPreparationPhase = true;
 let handDrawerOpen = false;
 // Mobile UI: 底部 dock 顯示內容（手牌 / 市場）
 let mobileDockTab: 'hand' | 'market' = 'hand';
+// Keep horizontal scroll position for hand lists (avoid jumping back to start on rerender)
+let mobileHandScrollLeft = 0;
+let desktopHandScrollLeft: [number, number] = [0, 0];
 // Mobile UI: 對手場地展開/收合（預設收合，節省空間）
 let mobileOpponentBoardOpen = false;
 let chargeSelectionMode = false;
@@ -524,8 +548,13 @@ function renderHomeScreen() {
                 </button>
             </div>
 
-            <div class="mt-6 flex items-center justify-center gap-3">
-                <button id="rulesBtn" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">規則</button>
+            <!-- Make Rules button match the mode buttons' width (full width on mobile, 1-column width on desktop) -->
+            <div class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button id="rulesBtn" class="sm:col-start-2 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 px-4 py-4 text-left shadow-lg shadow-black/20 transition-all active:scale-[0.99]">
+                    <div class="text-[9px] font-black tracking-[0.3em] text-slate-300 uppercase">Info</div>
+                    <div class="mt-1 text-lg font-black">規則</div>
+                    <div class="mt-1 text-[11px] font-bold text-slate-200/90">玩法教學 / 回合流程</div>
+                </button>
             </div>
         </div>
     `;
@@ -553,18 +582,138 @@ function renderRulesScreen() {
 
             <div class="mt-6 space-y-4 text-slate-200/90">
                 <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">流程</div>
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">勝利條件</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        讓對手的 <span class="text-white">HP（生命值）</span> 變成 0（或以下）即可獲勝。
+                    </div>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">四個屬性</div>
+                    <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                            <div class="text-[11px] font-black text-red-200 tracking-wider">攻擊 Attack</div>
+                            <div class="mt-1 text-[13px] font-black text-white">造成傷害</div>
+                            <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
+                                會在對手的「傷害階段」結算。一般攻擊會先被對手的防禦抵擋；部分效果可能造成無視防禦的傷害。
+                            </div>
+                        </div>
+                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                            <div class="text-[11px] font-black text-blue-200 tracking-wider">防禦 Defense</div>
+                            <div class="mt-1 text-[13px] font-black text-white">抵擋攻擊</div>
+                            <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
+                                主要用來扣抵對手的「一般攻擊」。例如對手打出 4 點攻擊，你有 2 點防禦，則只會受到 2 點傷害。
+                            </div>
+                        </div>
+                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                            <div class="text-[11px] font-black text-emerald-200 tracking-wider">魔力 Magic</div>
+                            <div class="mt-1 text-[13px] font-black text-white">施放/啟動效果</div>
+                            <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
+                                用於啟動部分卡牌效果（例如強化攻擊、閃避、追加骰子等）。魔力通常在「判定階段」獲得。
+                            </div>
+                        </div>
+                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                            <div class="text-[11px] font-black text-amber-200 tracking-wider">金幣 Gold</div>
+                            <div class="mt-1 text-[13px] font-black text-white">購買卡牌</div>
+                            <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
+                                在「購買階段」使用，用來從市場買牌或從牌庫抽牌（依提示消耗金幣）。
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">開局</div>
                     <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
-                        <li>出牌階段：從手牌打出到三個區域（每回合最多 3 張）。</li>
-                        <li>擲骰階段：依本回合出牌數決定擲骰數量。</li>
-                        <li>判定/防禦/傷害/攻擊/購買：依 UI 指示進行。</li>
+                        <li>先手起手 3 張、後手起手 4 張。</li>
+                        <li>遊戲開始會先進入一次 <span class="text-white">準備</span>：後手先打出 1 張牌到任一區域，然後按「開始」。</li>
                     </ul>
                 </div>
+
                 <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">提示</div>
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">出牌階段</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        從手牌打出牌到 3 個區域。
+                    </div>
                     <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
-                        <li>桌機可滑鼠移入卡牌查看 tooltip；手機可長按卡牌查看。</li>
-                        <li>卡牌大小：到 src/main.ts 調整 getCardFrameStyleVars / getMobileCardFrameStyleVars。</li>
+                        <li>操作：先點手牌，再點想放置的區域。</li>
+                        <li>限制：每回合最多出 3 張；若你有手牌，至少要出 1 張才能繼續。</li>
+                        <li>每個區域最上方的那張牌，會成為該區域本回合的「招式效果」。</li>
+                    </ul>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">擲骰階段</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        選擇擲骰數量並擲骰。骰子會落在不同區域，影響後續的屬性結算。
+                    </div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>通常：出牌越多，能擲的骰子越少（畫面右上會顯示可選的擲骰按鈕）。</li>
+                        <li>部分卡牌會在此階段提供額外骰子或重擲/捨棄等操作。</li>
+                    </ul>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">判定階段</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        依骰子落點與你各區域的卡牌屬性，結算本回合獲得的 <span class="text-white">攻擊 / 防禦 / 魔力 / 金幣</span>。
+                    </div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>這裡是你本回合資源的主要來源（魔力與金幣都在這裡累積）。</li>
+                        <li>若卡牌效果需要在判定階段啟動，畫面會提示你可點擊的卡牌/目標。</li>
+                    </ul>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">防禦階段</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        面對對手上一回合留下的攻擊，你可以使用防禦值或特定效果來降低傷害。
+                    </div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>一般攻擊會被你的防禦抵擋。</li>
+                        <li>若需要選目標（例如選擇要閃避的那一下攻擊），徽章會發光提示可以點。</li>
+                    </ul>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">傷害階段</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        結算對手對你造成的傷害，並扣除你的 HP。
+                    </div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>一般傷害會先扣防禦後再扣 HP。</li>
+                        <li>若 HP 變成 0（或以下），對手立即獲勝。</li>
+                    </ul>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">攻擊階段</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        你在判定後形成的攻擊（以及此階段可啟動的攻擊效果）會準備完成，並留到對手回合結算。
+                    </div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>如果你有可在攻擊階段啟動的卡牌，會發光提示可點擊。</li>
+                    </ul>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">購買階段</div>
+                    <div class="mt-3 text-sm font-bold leading-relaxed">
+                        使用金幣購買卡牌，讓你的手牌與牌組變強。
+                    </div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>市場有 3 格：價格依序為 <span class="text-white">3 / 2 / 1</span>（最便宜在最右）。</li>
+                        <li>也可以從牌庫抽牌：第 1 張免費，之後依提示消耗金幣（最多抽 3 張）。</li>
+                        <li>買到的牌會進入你的手牌，下一回合出牌階段可打出。</li>
+                    </ul>
+                </div>
+
+                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
+                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">操作方式</div>
+                    <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
+                        <li>桌機：滑鼠移到卡牌可看效果說明（tooltip）。</li>
+                        <li>手機：長按卡牌可看效果說明。</li>
+                        <li>需要你選目標時（例如選骰子、選攻擊徽章），畫面會用發光/閃爍提示可以點的地方，照著提示點即可。</li>
                     </ul>
                 </div>
             </div>
@@ -1454,11 +1603,8 @@ function handleJudging() {
         }
     });
 
+    // Magic income (before spending in judging)
     p.magic = areaMagic.reduce((a, b) => a + b, 0);
-
-    // Apply persistent expenditure correction
-    const originalMagicIncome = p.magic;
-    p.magic = Math.max(0, p.magic - p.magicSpentInJudging);
 
     // [Mirage] Bonus Attributes
     p.activeAreaEffects.forEach((card, aIdx) => {
@@ -1478,6 +1624,7 @@ function handleJudging() {
     }
 
     // Apply persistent expenditure correction (Subtract costs paid this phase)
+    // Note: only subtract ONCE; otherwise magic costs (e.g. 魔運之石) will be double-charged.
     p.magic = Math.max(0, p.magic - p.magicSpentInJudging);
 
     // 3. Apply Flame Shield Effect (Before setting global defense)
@@ -2328,7 +2475,9 @@ function renderMarketPanel(typeColors) {
     `;
 
     if (canDraw) {
-        deckCard.classList.add('ring-2', mustDraw ? 'ring-emerald-400' : 'ring-indigo-300');
+        // mustDraw = 第 1 張免費抽牌：用綠色提示
+        // 其餘可購買抽牌：用與市場卡相同的 amber 色系提示
+        deckCard.classList.add('ring-2', mustDraw ? 'ring-emerald-400' : 'ring-amber-300');
         deckCard.onclick = buyFromDeck;
     }
 
@@ -2427,6 +2576,13 @@ function removeLuckyDie(idx) {
 
 function selectHandCard(idx) {
     if (currentPhaseIndex !== 0) return;
+    // Preserve hand scroll positions before rerender
+    const mobile = document.getElementById('mobile-hand-list');
+    if (mobile) mobileHandScrollLeft = (mobile as HTMLDivElement).scrollLeft;
+    const d0 = document.getElementById('desktop-hand-wrap-0');
+    if (d0) desktopHandScrollLeft[0] = (d0 as HTMLDivElement).scrollLeft;
+    const d1 = document.getElementById('desktop-hand-wrap-1');
+    if (d1) desktopHandScrollLeft[1] = (d1 as HTMLDivElement).scrollLeft;
     selectedHandCardIndex = idx;
     render();
 }
@@ -2595,13 +2751,13 @@ function setMobileDockTab(tab: 'hand' | 'market') {
 
 function getMobileCardFrameStyleVars(size: 'board' | 'hand' | 'market') {
     if (size === 'board') {
-        return '--card-w: 70px; --card-h: 90px; --header-h: 20px; --chip: 14px; --chip-font: 7px; --title-font: 9px;';
+        return '--card-w: 90px; --card-h: 120px; --header-h: 23px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
     }
     if (size === 'hand') {
-        return '--card-w: 56px; --card-h: 74px; --header-h: 20px; --chip: 14px; --chip-font: 7px; --title-font: 9px;';
+        return '--card-w: 72px; --card-h: 100px; --header-h: 20px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
     }
     // market
-    return '--card-w: 56px; --card-h: 74px; --header-h: 20px; --chip: 14px; --chip-font: 7px; --title-font: 9px;';
+    return '--card-w: 72px; --card-h: 100px; --header-h: 20px; --chip: 16px; --chip-font: 8px; --title-font: 10px;';
 }
 
 function renderMobileTopBar(typeColors) {
@@ -2742,7 +2898,9 @@ function renderMobileMarketRow(typeColors) {
     deckCard.innerHTML = `<div class="flex flex-col items-center justify-center text-white"><div class="text-[10px] font-black tracking-[0.25em]">DECK</div><div class="text-[10px] font-bold opacity-80 mt-1">${deck.length}</div></div>`;
     if (canDraw) {
         // ring 稍微細一點，避免佔用太多空間
-        deckCard.classList.add('ring-2', mustDraw ? 'ring-emerald-400' : 'ring-indigo-300');
+        // mustDraw = 第 1 張免費抽牌：用綠色提示
+        // 其餘可購買抽牌：用與市場卡相同的 amber 色系提示
+        deckCard.classList.add('ring-2', mustDraw ? 'ring-emerald-400' : 'ring-amber-300');
         deckCard.onclick = buyFromDeck;
     }
 
@@ -2942,7 +3100,7 @@ function renderMobilePlayerBlock(
             `;
 
             const slot = document.createElement('div');
-            slot.className = `minimal-slot w-[150px] h-[120px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            slot.className = `minimal-slot w-[150px] h-[200px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const atkContainer = document.createElement('div');
@@ -2989,7 +3147,7 @@ function renderMobilePlayerBlock(
                 const effId = isActiveEffect ? getEffectiveEffectId(p, aIdx) : card.effectId;
                 cardEl.className = `card-frame shadow-sm group absolute left-1/2 -translate-x-1/2 transition-all duration-300 overflow-visible ${isTop ? 'z-10' : 'z-0'} hover:z-[100]`;
                 cardEl.setAttribute('style', getMobileCardFrameStyleVars('board'));
-                cardEl.style.top = `${cIdx * 18}px`;
+                cardEl.style.top = `${cIdx * 20}px`;
 
                 if (p.contractTriggeredAreaIdx === aIdx && isActiveEffect) cardEl.classList.add('ring-2', 'ring-red-500', 'z-50');
                 if (effId === 'breakthrough' && isActiveEffect && p.hp <= 3) cardEl.classList.add('ring-2', 'ring-cyan-400', 'z-40');
@@ -3217,12 +3375,18 @@ function renderMobileHandDrawer(typeColors) {
     if (handDrawerOpen) {
         const body = document.createElement('div');
 
+        // Keep dock content height consistent between HAND and MARKET,
+        // and don't shrink when hand is empty.
+        // (Header height is handled by the drawer header above.)
+        const dockBodyBase = 'h-[150px]';
+
         // 若顯示市場：讓 market row 自己控制 padding，避免「外層 + 內層」雙重 padding/border
         // 任意階段皆可瀏覽市場（但只有購買階段能真的買）
         const isMarketDock = mobileDockTab === 'market';
         body.className = isMarketDock
-            ? 'bg-white border-t border-slate-200 p-0'
-            : 'bg-white border-t border-slate-200 px-3 py-3';
+            ? `bg-white border-t border-slate-200 p-0 ${dockBodyBase}`
+            // Hand dock uses flex to vertically center the scrolling row.
+            : `bg-white border-t border-slate-200 px-3 ${dockBodyBase} flex items-center`;
 
         // Dock: show market / hand by tab
         if (isMarketDock) {
@@ -3230,13 +3394,20 @@ function renderMobileHandDrawer(typeColors) {
         } else {
             const list = document.createElement('div');
             // 手牌超過一定數量時：維持卡牌寬度，不縮小，改用左右滑動查看
-            list.className = 'flex gap-3 overflow-x-auto pb-1';
-            list.addEventListener('scroll', hideGlobalTooltip);
+            // Use items-center + overflow-y-visible so rings/glow won't be clipped,
+            // and keep the row vertically centered within the fixed dock height.
+            list.className = 'flex items-center gap-3 overflow-x-auto overflow-y-visible w-full py-3';
+            list.id = 'mobile-hand-list';
+            list.scrollLeft = mobileHandScrollLeft;
+            list.addEventListener('scroll', () => {
+                mobileHandScrollLeft = list.scrollLeft;
+                hideGlobalTooltip();
+            });
             p.hand.forEach((card, hIdx) => {
                 const cardEl = document.createElement('div');
                 const isSelected = selectedHandCardIndex === hIdx;
                 // shrink-0：避免被 flex 壓縮，確保可左右滑動
-                cardEl.className = `card-frame shrink-0 shadow-sm group relative transition-all ${currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-indigo-600 ring-2 ring-indigo-50 scale-105' : ''}`;
+                cardEl.className = `card-frame shrink-0 shadow-sm group relative transition-all ${currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : ''}`;
                 cardEl.setAttribute('style', getMobileCardFrameStyleVars('hand'));
                 cardEl.innerHTML = renderCardContentHTML(card, typeColors, {showTooltip: true});
                 attachCardTooltip(cardEl, {title: card.effectName, desc: card.effectDesc});
@@ -3244,7 +3415,9 @@ function renderMobileHandDrawer(typeColors) {
                 list.appendChild(cardEl);
             });
             if (p.hand.length === 0) {
-                list.innerHTML = `<div class="w-full text-[10px] font-bold text-slate-300 uppercase tracking-widest italic text-center">空</div>`;
+                // Keep the height stable even when empty.
+                list.className = 'w-full h-full flex items-center justify-center';
+                list.innerHTML = `<div class="text-[10px] font-bold text-slate-300 uppercase tracking-widest italic text-center">空</div>`;
             }
             body.appendChild(list);
         }
@@ -3348,6 +3521,9 @@ function render() {
             overlay.appendChild(modal);
             root.appendChild(overlay);
         }
+
+        // Restore hand scroll position after DOM is mounted (avoid jumping back to start on rerender)
+        scheduleRestoreHandScrollPositions();
 
         // Schedule AI after DOM is updated
         if (isComputerTurnNow() && !computerBusy) {
@@ -3563,6 +3739,9 @@ function render() {
         overlay.appendChild(modal);
         root.appendChild(overlay);
     }
+
+    // Restore hand scroll position after DOM is mounted (avoid jumping back to start on rerender)
+    scheduleRestoreHandScrollPositions();
 
     // Schedule AI after DOM is updated
     if (isComputerTurnNow() && !computerBusy) {
@@ -3982,13 +4161,18 @@ function renderPlayerArea(idx: 0 | 1) {
     // 改用 CSS Grid（rows=2 + grid-flow-col），避免 flex-wrap 在出現 scrollbar 後高度不足導致掉成 1 排。
     // 註：h 需要包含 2 張牌高度 + gap + padding + scrollbar 高度 buffer。
     handWrap.className = 'w-full grid grid-rows-2 grid-flow-col auto-cols-max gap-3 h-[220px] overflow-x-auto overflow-y-hidden p-2 content-start justify-center';
+    handWrap.id = `desktop-hand-wrap-${idx}`;
+    handWrap.scrollLeft = desktopHandScrollLeft[idx];
     // 捲動時也先關掉 tooltip（避免滑鼠停在卡上時拖曳捲動造成 tooltip 殘留）
-    handWrap.addEventListener('scroll', hideGlobalTooltip);
+    handWrap.addEventListener('scroll', () => {
+        desktopHandScrollLeft[idx] = handWrap.scrollLeft;
+        hideGlobalTooltip();
+    });
     p.hand.forEach((card, hIdx) => {
         const cardEl = document.createElement('div');
         const isSelected = (isCurrent && selectedHandCardIndex === hIdx);
 
-        cardEl.className = `card-frame shadow-sm group relative transition-all ${isCurrent && currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-indigo-600 ring-2 ring-indigo-50 shadow-indigo-100 scale-105' : 'hover:-translate-y-1 hover:border-slate-400'}`;
+        cardEl.className = `card-frame shadow-sm group relative transition-all ${isCurrent && currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : 'hover:-translate-y-1 hover:border-slate-400'}`;
         cardEl.setAttribute('style', getCardFrameStyleVars('hand'));
         cardEl.innerHTML = renderCardContentHTML(card, typeColors, {showTooltip: true});
         attachCardTooltip(cardEl, {title: card.effectName, desc: card.effectDesc});

@@ -9,7 +9,7 @@
   --accent: #6366f1;
   --card-w: 70px;
   --card-h: 100px;
-  --slot-w: 70px;
+  --slot-w: 90px;
 }
 
 body {
@@ -25,7 +25,7 @@ body {
 }
 
 .minimal-slot {
-  @apply w-[var(--slot-w)] h-40 border border-slate-200 bg-slate-100/30 rounded-xl relative transition-all duration-300;
+  @apply w-[var(--slot-w)] h-60 border border-slate-200 bg-slate-100/30 rounded-xl relative transition-all duration-300;
 }
 
 .resource-chip {
