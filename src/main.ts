@@ -7,6 +7,36 @@ import './index.css';
 
 import {CARD_DEFS, EFFECTS, type CardAttr} from './cards';
 
+// --- Asset preloading ---
+
+let cardImagesPreloaded = false;
+
+async function preloadCardImages() {
+    if (cardImagesPreloaded) return;
+    cardImagesPreloaded = true;
+
+    // Preload & decode all card PNGs to avoid flicker when the app re-renders DOM.
+    // (This app rebuilds the whole UI tree on each render(), so <img> elements are recreated often.)
+    const imgNos = [...new Set(CARD_DEFS.map(d => d.imgNo))].sort((a, b) => a - b);
+    const tasks = imgNos.map(async (n) => {
+        const img = new Image();
+        img.src = getCardPngUrlByImgNo(n);
+        // decode() isn't supported in some older browsers; fall back to onload.
+        try {
+            // If already cached, decode resolves quickly.
+            // @ts-ignore
+            if (typeof img.decode === 'function') await img.decode();
+            else await new Promise<void>((res, rej) => {
+                img.onload = () => res();
+                img.onerror = () => rej(new Error('image load failed'));
+            });
+        } catch {
+            // Ignore failures; worst case is you keep the current behavior.
+        }
+    });
+    await Promise.allSettled(tasks);
+}
+
 function getBaseUrl() {
     // Vite sets BASE_URL for GitHub Pages deployments (repo sub-path)
     const base = (import.meta as any)?.env?.BASE_URL as string | undefined;
@@ -49,7 +79,8 @@ function renderCardPngHTML(effectId: string, alt: string) {
                     alt="${alt}"
                     class="w-full h-full object-contain select-none"
                     draggable="false"
-                    loading="lazy"
+                    loading="eager"
+                    decoding="async"
                 />
             </div>
         </div>
@@ -136,9 +167,16 @@ function scheduleRestoreHandScrollPositions() {
 
 function attachCardTooltip(
     cardEl: HTMLElement,
-    {title, desc}: {title: string; desc: string}
+    {effectId, alt}: {effectId: string; alt: string}
 ) {
     const tip = ensureGlobalTooltipEl();
+
+    // On desktop, this app fully re-renders the DOM frequently.
+    // When an element is created directly under the mouse cursor, browsers may fire
+    // `pointerenter` immediately even if the user didn't intentionally hover.
+    // To avoid the "card suddenly becomes huge" illusion, we only show the preview
+    // after the mouse actually MOVES within the card.
+    let mouseHoverActive = false;
 
     // Mobile/touch：用「長按」顯示 tooltip（避免 mobile 沒有 hover 的問題）
     let longPressTimer: number | null = null;
@@ -155,11 +193,19 @@ function attachCardTooltip(
     };
 
     const renderTip = () => {
+        const src = getCardPngUrlByImgNo(getImgNoForEffectId(effectId));
         tip.innerHTML = `
-            <div class="relative w-48 bg-slate-900/95 text-white p-3 flex flex-col items-center justify-center text-center rounded-lg shadow-2xl">
-                <div class="text-[11px] font-black uppercase mb-1 text-indigo-300 tracking-wider">${title}</div>
-                <div class="text-[8.5px] font-medium leading-relaxed text-slate-300">${desc}</div>
-                <div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 rotate-45"></div>
+            <div class="relative rounded-2xl bg-slate-900/90 p-2 shadow-2xl border border-white/10">
+                <div class="w-[280px] h-[430px] sm:w-[320px] sm:h-[440px] rounded-xl overflow-hidden bg-white">
+                    <img
+                        src="${src}"
+                        alt="${alt}"
+                        class="w-full h-full object-contain select-none"
+                        draggable="false"
+                        loading="eager"
+                        decoding="async"
+                    />
+                </div>
             </div>
         `;
         tip.classList.remove('hidden');
@@ -196,17 +242,24 @@ function attachCardTooltip(
     // Desktop hover (mouse)
     cardEl.addEventListener('pointerenter', (e: PointerEvent) => {
         if (e.pointerType !== 'mouse') return;
-        renderTip();
-        // 下一幀再定位，避免剛顯示時 rect 還沒更新
-        requestAnimationFrame(positionTip);
+        mouseHoverActive = true;
     });
     cardEl.addEventListener('pointermove', (e: PointerEvent) => {
         if (e.pointerType !== 'mouse') return;
+        if (!mouseHoverActive) return;
+
+        // First actual move inside card => show preview.
+        if (tip.classList.contains('hidden')) {
+            renderTip();
+        }
         positionTip();
     });
     cardEl.addEventListener('pointerleave', (e: PointerEvent) => {
         clearLongPress();
-        if (e.pointerType === 'mouse') hideGlobalTooltip();
+        if (e.pointerType === 'mouse') {
+            mouseHoverActive = false;
+            hideGlobalTooltip();
+        }
     });
 
     // Touch long-press
@@ -2561,7 +2614,7 @@ function renderMarketPanel(typeColors) {
         if (c) {
             cardEl.innerHTML = renderCardPngHTML(c.effectId, c.effectName);
             // 市場卡也用 portal tooltip，避免被右側面板的 overflow 裁切
-            attachCardTooltip(cardEl, {title: c.effectName, desc: c.effectDesc});
+            attachCardTooltip(cardEl, {effectId: c.effectId, alt: c.effectName});
             if (canBuy) {
                 cardEl.classList.add('ring-2', 'ring-amber-300');
                 cardEl.onclick = () => buyMarketCard(idx);
@@ -2983,7 +3036,7 @@ function renderMobileMarketRow(typeColors) {
         cardEl.setAttribute('style', getMobileCardFrameStyleVars('market'));
         if (c) {
             cardEl.innerHTML = renderCardPngHTML(c.effectId, c.effectName);
-            attachCardTooltip(cardEl, {title: c.effectName, desc: c.effectDesc});
+            attachCardTooltip(cardEl, {effectId: c.effectId, alt: c.effectName});
             if (canBuy) {
                 // ring 稍微細一點，避免佔用太多空間
                 cardEl.classList.add('ring-2', 'ring-amber-300');
@@ -3226,7 +3279,7 @@ function renderMobilePlayerBlock(
                     if (card.effectId === 'illusion' && p.illusionCopiedEffectIds[aIdx]) {
                         tooltipDesc = EFFECTS.find(e => e.id === p.illusionCopiedEffectIds[aIdx])?.desc || tooltipDesc;
                     }
-                    attachCardTooltip(cardEl, {title: nameForUI, desc: tooltipDesc});
+                    attachCardTooltip(cardEl, {effectId: card.effectId, alt: nameForUI});
                 }
 
                 // Mobile：主動效果（可點擊）與發光提示
@@ -3466,7 +3519,7 @@ function renderMobileHandDrawer(typeColors) {
                 cardEl.className = `card-frame shrink-0 shadow-sm group relative transition-all ${currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : ''}`;
                 cardEl.setAttribute('style', getMobileCardFrameStyleVars('hand'));
                 cardEl.innerHTML = renderCardPngHTML(card.effectId, card.effectName);
-                attachCardTooltip(cardEl, {title: card.effectName, desc: card.effectDesc});
+                attachCardTooltip(cardEl, {effectId: card.effectId, alt: card.effectName});
                 if (currentPhaseIndex === 0) cardEl.onclick = () => selectHandCard(hIdx);
                 list.appendChild(cardEl);
             });
@@ -4039,7 +4092,7 @@ function renderPlayerArea(idx: 0 | 1) {
             if (card.effectId === 'illusion' && p.illusionCopiedEffectIds[aIdx]) {
                 tooltipDesc = EFFECTS.find(e => e.id === p.illusionCopiedEffectIds[aIdx])?.desc || tooltipDesc;
             }
-            attachCardTooltip(cardEl, {title: nameForUI, desc: tooltipDesc});
+                    attachCardTooltip(cardEl, {effectId: card.effectId, alt: nameForUI});
         }
 
         if (isCurrent && isTop && isActiveEffect) {
@@ -4232,7 +4285,7 @@ function renderPlayerArea(idx: 0 | 1) {
         cardEl.className = `card-frame shadow-sm group relative transition-all ${isCurrent && currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : 'hover:-translate-y-1 hover:border-slate-400'}`;
         cardEl.setAttribute('style', getCardFrameStyleVars('hand'));
         cardEl.innerHTML = renderCardPngHTML(card.effectId, card.effectName);
-        attachCardTooltip(cardEl, {title: card.effectName, desc: card.effectDesc});
+                attachCardTooltip(cardEl, {effectId: card.effectId, alt: card.effectName});
         if (isCurrent && currentPhaseIndex === 0) {
             cardEl.onclick = () => selectHandCard(hIdx);
         }
@@ -4249,6 +4302,8 @@ function renderPlayerArea(idx: 0 | 1) {
 
 // --- App Start ---
 // Default: Home screen. Click PvP to start a match (will call initGame()).
+// Preload all card images early to reduce flicker during full re-renders.
+void preloadCardImages();
 render();
 
 // 讓 responsive 模式縮放視窗時可以即時切換 mobile/desktop layout

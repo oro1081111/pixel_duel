@@ -233,8 +233,8 @@ export const CARD_DEFS: CardDef[] = [
     imgNo: 19,
     name: '魔能湧動',
     desc: '該區獲得的魔力數值翻倍 [判定階段][被動觸發]',
-    left: { type: 'gold', value: 1 },
-    right: { type: 'attack', value: 1 },
+    left: { type: 'magic', value: 1 },
+    right: { type: 'magic', value: 1 },
   },
   {
     id: 'breakthrough',
