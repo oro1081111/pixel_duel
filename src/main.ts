@@ -6,6 +6,16 @@
 import './index.css';
 
 import {CARD_DEFS, EFFECTS, type CardAttr} from './cards';
+import {getBaseAttrForDie, getBaseBarImg} from './basebars';
+
+// Basebar image height (UI only)
+const BASEBAR_IMG_HEIGHT_PX = 45;
+
+function renderBaseBarImgHTML(playerIdx: 0 | 1, zoneIdx: 0 | 1 | 2) {
+    const src = getBaseBarImg(playerIdx, zoneIdx);
+    // Use inline style to avoid relying on Tailwind arbitrary value compilation.
+    return `<img src="${src}" alt="basebar" style="height:${BASEBAR_IMG_HEIGHT_PX}px; width:auto;" />`;
+}
 
 // --- Asset preloading ---
 
@@ -323,6 +333,11 @@ const PHASE_NAMES = [
   '攻擊階段',
   '購買階段'
 ];
+
+// Illusion (幻象幽影) can copy opponent active effect cards,
+// but some effects are explicitly not copyable.
+// NOTE: This list is used by UI / AI / runtime guard checks.
+const ILLUSION_UNCOPYABLE_EFFECT_IDS = new Set<string>(['lucky', 'fate', 'frost']);
 
 // --- State ---
 
@@ -1003,7 +1018,7 @@ function getAvailableActivationsForCurrentPlayer() {
             }
             if (p.activeAreaEffects[aIdx]?.effectId === 'illusion' && !p.illusionUsedIndices.includes(aIdx) && p.magic >= 1 && !mirageBlocked) {
                 const opp = getOpponent();
-                const hasCopyableCard = opp.activeAreaEffects.some(c => c && c.effectId !== 'lucky' && c.effectId !== 'fate');
+                const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
                 if (hasCopyableCard) acts.push({label: `幻象幽影(區域${aIdx + 1})`, run: () => useIllusion(aIdx)});
             }
         }
@@ -1031,7 +1046,7 @@ function getAvailableActivationsForCurrentPlayer() {
         const selfTargets = listSelfAttackHitTargets();
         for (let aIdx = 0; aIdx < 3; aIdx++) {
             const eff = getEffectiveEffectId(p, aIdx);
-            if (eff === 'amplify' && !p.amplifyUsedIndices.includes(aIdx)) {
+            if (eff === 'amplify' && !p.amplifyUsedIndices.includes(aIdx) && hasAnyAttackTarget(p)) {
                 acts.push({label: `增幅(區域${aIdx + 1})`, run: () => useAmplify(aIdx)});
             }
             if (eff === 'magic_bullet' && p.magic >= 1 && !mirageBlocked) {
@@ -1125,13 +1140,13 @@ async function aiResolveSelectionModesStep() {
         return false;
     }
 
-    // Illusion: pick one opponent active effect card (not lucky/fate)
+    // Illusion: pick one opponent active effect card (some effects are not copyable)
     if (illusionSelectionMode) {
         const opp = getOpponent();
         const candidates: number[] = [];
         opp.activeAreaEffects.forEach((c, aIdx) => {
             if (!c) return;
-            if (c.effectId === 'lucky' || c.effectId === 'fate') return;
+            if (ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId)) return;
             candidates.push(aIdx);
         });
         if (candidates.length > 0) {
@@ -1635,11 +1650,6 @@ function handleJudging() {
     const areaMagic = [0, 0, 0];
     const areaGold = [0, 0, 0];
 
-    // Base attributes setup (1-6)
-    const baseAttrs = pIdx === 0 
-        ? ['attack', 'defense', 'magic', 'gold', 'gold', 'attack'] 
-        : ['gold', 'magic', 'magic', 'attack', 'attack', 'defense'];
-
     console.log('--- 判定階段 ---');
     const diceCountsPerArea = [0, 0, 0];
     diceResults.forEach(val => {
@@ -1648,12 +1658,12 @@ function handleJudging() {
         const isLeft = (val % 2 !== 0); 
         const stack = p.board[areaIdx];
         
-        // 1. Add Base Attributte
-        const baseAttr = baseAttrs[val - 1];
-        if (baseAttr === 'attack') areaSums[areaIdx] += 1;
-        else if (baseAttr === 'defense') areaDefense[areaIdx] += 1;
-        else if (baseAttr === 'magic') areaMagic[areaIdx] += 1;
-        else if (baseAttr === 'gold') areaGold[areaIdx] += 1;
+        // 1. Add Base Attribute (editable table: src/basebars.ts)
+        const base = getBaseAttrForDie(pIdx as 0 | 1, val);
+        if (base.type === 'attack') areaSums[areaIdx] += base.value;
+        else if (base.type === 'defense') areaDefense[areaIdx] += base.value;
+        else if (base.type === 'magic') areaMagic[areaIdx] += base.value;
+        else if (base.type === 'gold') areaGold[areaIdx] += base.value;
 
         // 2. Add Card Attributes (type + value)
         stack.forEach(card => {
@@ -2048,7 +2058,7 @@ function useIllusion(areaIdx) {
         }
 
         const opp = getOpponent();
-        const hasCopyableCard = opp.activeAreaEffects.some(c => c && c.effectId !== 'lucky' && c.effectId !== 'fate');
+        const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
         if (!hasCopyableCard) {
             alert('對手目前沒有可複製的招式卡');
             return;
@@ -2076,8 +2086,8 @@ function targetIllusion(oppAreaIdx) {
         return;
     }
 
-    if (targetCard.effectId === 'lucky' || targetCard.effectId === 'fate') {
-        alert('不可複製「幸運」或「命運」');
+    if (ILLUSION_UNCOPYABLE_EFFECT_IDS.has(targetCard.effectId)) {
+        alert('不可複製該招式卡');
         return;
     }
 
@@ -2103,6 +2113,12 @@ function useAmplify(areaIdx) {
     if (card && getEffectiveEffectId(p, areaIdx) === 'amplify') {
         if (p.amplifyUsedIndices.includes(areaIdx)) {
             alert('這張增幅卡本回合已使用過');
+            return;
+        }
+        // No attacks => cannot meaningfully trigger.
+        if (!hasAnyAttackTarget(p)) {
+            phaseHint = '沒有可強化的攻擊';
+            render();
             return;
         }
         // Amplify is now free
@@ -2155,6 +2171,12 @@ function useFlare(areaIdx) {
     if (card && getEffectiveEffectId(p, areaIdx) === 'flare') {
         if (p.flareUsedIndices.includes(areaIdx)) {
             alert('這張閃光卡本回合已使用過');
+            return;
+        }
+        // No attacks => there is no selectable target badge, so don't enter selection mode.
+        if (!hasAnyAttackTarget(p)) {
+            phaseHint = '沒有可翻倍的攻擊';
+            render();
             return;
         }
         if (p.magic >= 3) {
@@ -2246,6 +2268,11 @@ function useThrust(areaIdx) {
 function hasAnyThrustTarget(p: (typeof players)[number]) {
     // Thrust only affects normal attacks with value 1~2
     return p.currentAttacks.some(areaAtks => areaAtks.some(v => v > 0 && v <= 2));
+}
+
+function hasAnyAttackTarget(p: (typeof players)[number]) {
+    // Used by effects that require an existing normal attack hit (value > 0)
+    return p.currentAttacks.some(areaAtks => areaAtks.some(v => v > 0));
 }
 
 function useForest(areaIdx) {
@@ -3185,29 +3212,15 @@ function renderMobilePlayerBlock(
             const zone = document.createElement('div');
             zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
 
-            const labelL = aIdx * 2 + 1;
-            const labelR = aIdx * 2 + 2;
-            const baseAttrs = idx === 0
-                ? ['attack', 'defense', 'magic', 'gold', 'gold', 'attack']
-                : ['gold', 'magic', 'magic', 'attack', 'attack', 'defense'];
-            const baseL = baseAttrs[aIdx * 2];
-            const baseR = baseAttrs[aIdx * 2 + 1];
-
             zone.innerHTML = `
-                <div class="flex w-full justify-around items-center mb-0 pt-6">
-                    <div class="flex flex-col items-center w-1/2 border-r border-slate-50 opacity-80">
-                        <span class="text-[9px] font-black text-slate-400 leading-none mb-0.5">${labelL}</span>
-                        <div class="attr-chip-hand ${typeColors[baseL]} shadow-sm">1</div>
-                    </div>
-                    <div class="flex flex-col items-center w-1/2 opacity-80">
-                        <span class="text-[9px] font-black text-slate-400 leading-none mb-0.5">${labelR}</span>
-                        <div class="attr-chip-hand ${typeColors[baseR]} shadow-sm">1</div>
-                    </div>
+                <div class="w-full flex items-center justify-center pt-2 pb-0">
+                    ${renderBaseBarImgHTML(idx as 0 | 1, aIdx as 0 | 1 | 2)}
                 </div>
             `;
 
             const slot = document.createElement('div');
-            slot.className = `minimal-slot w-[150px] h-[200px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            // Mobile only: lift the card stack a bit closer to basebar (allow slight overlap)
+            slot.className = `minimal-slot -mt-2 w-[150px] h-[200px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const atkContainer = document.createElement('div');
@@ -3299,7 +3312,7 @@ function renderMobilePlayerBlock(
                         }
                     } else if (currentPhaseIndex === 5 && effId === 'amplify') {
                         // Amplify is free: Only pulse if THIS specific area's amplify not used
-                        if (!p.amplifyUsedIndices.includes(aIdx)) {
+                        if (!p.amplifyUsedIndices.includes(aIdx) && hasAnyAttackTarget(p)) {
                             cardEl.classList.add('ring-2', 'ring-blue-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useAmplify(aIdx); };
                         }
@@ -3340,7 +3353,7 @@ function renderMobilePlayerBlock(
                         }
                     } else if (currentPhaseIndex === 5 && effId === 'flare') {
                         // Flare: Consume 3 magic, double one attack
-                        if (!p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && !isMirageBlocked) {
+                        if (!p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && hasAnyAttackTarget(p) && !isMirageBlocked) {
                             const isSource = flareSelectionMode && flareSourceAreaIdx === aIdx;
                             cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useFlare(aIdx); };
@@ -3373,7 +3386,7 @@ function renderMobilePlayerBlock(
                         }
                     } else if (currentPhaseIndex === 2 && card.effectId === 'illusion') {
                         const opp = getOpponent();
-                        const hasCopyableCard = opp.activeAreaEffects.some(c => c && c.effectId !== 'lucky' && c.effectId !== 'fate');
+                        const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
                         if (p.magic >= 1 && !p.illusionUsedIndices.includes(aIdx) && !isMirageBlocked && hasCopyableCard) {
                             cardEl.classList.add('ring-2', 'ring-teal-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useIllusion(aIdx); };
@@ -3392,7 +3405,7 @@ function renderMobilePlayerBlock(
                         }
                     }
                 }
-                if (!isCurrent && isTop && isActiveEffect && illusionSelectionMode && card.effectId !== 'lucky' && card.effectId !== 'fate') {
+                if (!isCurrent && isTop && isActiveEffect && illusionSelectionMode && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(card.effectId)) {
                     cardEl.classList.add('ring-2', 'ring-teal-500', 'cursor-pointer', 'shadow-2xl', 'z-50');
                     cardEl.onclick = (e) => { e.stopPropagation(); targetIllusion(aIdx); };
                 }
@@ -3402,7 +3415,7 @@ function renderMobilePlayerBlock(
             if (isCurrent && diceResults.length > 0) {
                 const dicePool = document.createElement('div');
                 // 往上移：讓骰子顯示位置更接近桌機版「浮在場地上方」
-                dicePool.className = 'absolute -top-12 inset-x-0 h-8 pointer-events-none z-30';
+                dicePool.className = 'absolute -top-15 inset-x-0 h-8 pointer-events-none z-30';
                 let leftCount = 0;
                 let rightCount = 0;
                 diceResults.forEach((val, originalIdx) => {
@@ -3936,25 +3949,9 @@ function renderPlayerArea(idx: 0 | 1) {
         const zone = document.createElement('div');
         zone.className = `relative flex flex-col items-center gap-1 p-3 rounded-2xl transition-all border border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
         
-        const labelL = aIdx * 2 + 1; // 1, 3, 5 on left
-        const labelR = aIdx * 2 + 2; // 2, 4, 6 on right
-        
-        const baseAttrs = idx === 0 
-            ? ['attack', 'defense', 'magic', 'gold', 'gold', 'attack'] 
-            : ['gold', 'magic', 'magic', 'attack', 'attack', 'defense'];
-        const baseL = baseAttrs[aIdx * 2];
-        const baseR = baseAttrs[aIdx * 2 + 1];
-
         zone.innerHTML = `
-            <div class="flex w-full justify-around items-center mb-0 pt-9">
-                <div class="flex flex-col items-center w-1/2 border-r border-slate-50 opacity-80">
-                    <span class="text-[9px] font-black text-slate-400 leading-none mb-0.5">${labelL}</span>
-                    <div class="attr-chip-hand ${typeColors[baseL]} shadow-sm">1</div>
-                </div>
-                <div class="flex flex-col items-center w-1/2 opacity-80">
-                    <span class="text-[9px] font-black text-slate-400 leading-none mb-0.5">${labelR}</span>
-                    <div class="attr-chip-hand ${typeColors[baseR]} shadow-sm">1</div>
-                </div>
+            <div class="w-full flex items-center justify-center pt-2 pb-5">
+                ${renderBaseBarImgHTML(idx as 0 | 1, aIdx as 0 | 1 | 2)}
             </div>
         `;
 
@@ -4110,7 +4107,7 @@ function renderPlayerArea(idx: 0 | 1) {
                 }
             } else if (currentPhaseIndex === 5 && effId === 'amplify') {
                 // Amplify is free: Only pulse if THIS specific area's amplify not used
-                if (!p.amplifyUsedIndices.includes(aIdx)) {
+                if (!p.amplifyUsedIndices.includes(aIdx) && hasAnyAttackTarget(p)) {
                     cardEl.classList.add('ring-2', 'ring-blue-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useAmplify(aIdx); };
                 }
@@ -4151,7 +4148,7 @@ function renderPlayerArea(idx: 0 | 1) {
                 }
             } else if (currentPhaseIndex === 5 && effId === 'flare') {
                 // Flare: Consume 3 magic, double one attack
-                if (!p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && !isMirageBlocked) {
+                if (!p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && hasAnyAttackTarget(p) && !isMirageBlocked) {
                     const isSource = flareSelectionMode && flareSourceAreaIdx === aIdx;
                     cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useFlare(aIdx); };
@@ -4184,7 +4181,7 @@ function renderPlayerArea(idx: 0 | 1) {
                 }
             } else if (currentPhaseIndex === 2 && card.effectId === 'illusion') {
                 const opp = getOpponent();
-                const hasCopyableCard = opp.activeAreaEffects.some(c => c && c.effectId !== 'lucky' && c.effectId !== 'fate');
+                const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
                 if (p.magic >= 1 && !p.illusionUsedIndices.includes(aIdx) && !isMirageBlocked && hasCopyableCard) {
                     cardEl.classList.add('ring-2', 'ring-teal-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useIllusion(aIdx); };
@@ -4204,7 +4201,7 @@ function renderPlayerArea(idx: 0 | 1) {
             }
         }
         // Opponent card targeting for Illusion
-        if (!isCurrent && isTop && isActiveEffect && illusionSelectionMode && card.effectId !== 'lucky' && card.effectId !== 'fate') {
+        if (!isCurrent && isTop && isActiveEffect && illusionSelectionMode && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(card.effectId)) {
             cardEl.classList.add('ring-2', 'ring-teal-500', 'cursor-pointer', 'shadow-2xl', 'z-50');
             cardEl.onclick = (e) => { e.stopPropagation(); targetIllusion(aIdx); };
         }
