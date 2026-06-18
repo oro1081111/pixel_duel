@@ -390,8 +390,10 @@ let showEffectList = false;
 
 type AppScreen = 'home' | 'rules' | 'game';
 type GameMode = 'pvp' | 'cvp' | 'pvc';
+type ComputerAiDifficulty = 'normal' | 'expert';
 let appScreen: AppScreen = 'home';
 let selectedMode: GameMode | null = null;
+let computerAiDifficulty: ComputerAiDifficulty = 'normal';
 
 // Match config
 let matchPlayerNames: [string, string] = ['玩家 A', '玩家 B'];
@@ -550,15 +552,19 @@ function isComputerTurnNow() {
     return appScreen === 'game' && c !== null && currentPlayerIndex === c;
 }
 
+function getComputerDisplayName() {
+    return computerAiDifficulty === 'expert' ? '專家電腦' : '電腦';
+}
+
 function setMatchPlayerNamesForMode(mode: GameMode) {
     if (mode === 'cvp') {
         // Computer first => computer is player 0
-        matchPlayerNames = ['電腦', '玩家'];
+        matchPlayerNames = [getComputerDisplayName(), '玩家'];
         return;
     }
     if (mode === 'pvc') {
         // Player first => computer is player 1
-        matchPlayerNames = ['玩家', '電腦'];
+        matchPlayerNames = ['玩家', getComputerDisplayName()];
         return;
     }
     matchPlayerNames = ['玩家 A', '玩家 B'];
@@ -645,6 +651,13 @@ function renderHomeScreen() {
                 <div class="mt-3 text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
             </div>
 
+            <div class="mt-6 flex justify-center">
+                <div class="inline-flex rounded-2xl bg-white/10 border border-white/15 p-1 shadow-lg shadow-black/20">
+                    <button id="aiNormalBtn" class="px-5 py-2 rounded-xl text-[12px] font-black tracking-widest transition-all ${computerAiDifficulty === 'normal' ? 'bg-indigo-500 text-white shadow-md shadow-indigo-950/30' : 'text-slate-200 hover:bg-white/10'}">普通</button>
+                    <button id="aiExpertBtn" class="px-5 py-2 rounded-xl text-[12px] font-black tracking-widest transition-all ${computerAiDifficulty === 'expert' ? 'bg-indigo-500 text-white shadow-md shadow-indigo-950/30' : 'text-slate-200 hover:bg-white/10'}">專家</button>
+                </div>
+            </div>
+
             <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <button id="modePvp" class="rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] transition-all px-4 py-4 text-left shadow-lg shadow-indigo-900/30 border border-indigo-400/30">
                     <div class="text-[9px] font-black tracking-[0.3em] text-indigo-200 uppercase">Mode</div>
@@ -679,6 +692,8 @@ function renderHomeScreen() {
     (wrap.querySelector('#modePvp') as HTMLButtonElement).onclick = () => startPvpGame();
     (wrap.querySelector('#modeCvp') as HTMLButtonElement).onclick = () => startCvpGame();
     (wrap.querySelector('#modePvc') as HTMLButtonElement).onclick = () => startPvcGame();
+    (wrap.querySelector('#aiNormalBtn') as HTMLButtonElement).onclick = () => { computerAiDifficulty = 'normal'; render(); };
+    (wrap.querySelector('#aiExpertBtn') as HTMLButtonElement).onclick = () => { computerAiDifficulty = 'expert'; render(); };
     (wrap.querySelector('#rulesBtn') as HTMLButtonElement).onclick = () => showRules();
     return wrap;
 }
@@ -986,6 +1001,656 @@ function listSelfAttackHitTargets() {
     return targets;
 }
 
+function chooseHighestAttackTarget<T extends {val: number}>(targets: T[]): T {
+    const maxVal = Math.max(...targets.map(t => t.val));
+    return chooseUniform(targets.filter(t => t.val === maxVal));
+}
+
+function chooseAiWeightedAttackTarget<T extends {val: number}>(targets: T[]): T {
+    return Math.random() < 0.9
+        ? chooseHighestAttackTarget(targets)
+        : chooseUniform(targets);
+}
+
+function chooseAiSelfAttackTarget(targets: Array<{areaIdx: number; hitIdx: number; val: number}>) {
+    return chooseAiWeightedAttackTarget(targets);
+}
+
+const AI_EFFECT_WEIGHTS: Record<string, number> = {
+    diversion: 10,
+    mirage: 9.5,
+    brilliance: 8.8,
+    forest: 8.2,
+    flare: 8,
+    reproduction: 7.8,
+    charge: 7.4,
+    soul_snatch: 7.2,
+    amplify: 7,
+    dodge: 6.8,
+    magic_bullet: 6.6,
+    fate: 6.4,
+    shadow: 6.2,
+    gale: 6,
+    thrust: 5.9,
+    barrier: 5.8,
+    holy_light: 5.7,
+    frost: 5.6,
+    lucky: 5.4,
+    backfire: 5.3,
+    surge: 5.2,
+    magic_luck: 5,
+    shield: 4.8,
+    contract: 4.6,
+    breakthrough: 4.4,
+    flame_shield: 4.3,
+    illusion: 6,
+    ambush: 4.2,
+};
+
+const AI_ATTR_WEIGHTS: Record<string, number> = {
+    attack: 2.15,
+    magic: 1.6,
+    defense: 1.6,
+    gold: 1.15,
+};
+
+const MAGIC_SPEND_EFFECT_IDS = new Set([
+    'charge',
+    'reproduction',
+    'flare',
+    'magic_bullet',
+    'dodge',
+    'shield',
+    'barrier',
+    'forest',
+    'holy_light',
+    'soul_snatch',
+    'magic_luck',
+    'illusion',
+]);
+
+function isMagicSpendEffect(effectId: string | null | undefined) {
+    return !!effectId && MAGIC_SPEND_EFFECT_IDS.has(effectId);
+}
+
+function countMagicSpendCards(p: PlayerState) {
+    const activeCount = p.activeAreaEffects.filter(c => isMagicSpendEffect(c?.effectId)).length;
+    const handCount = p.hand.filter(c => isMagicSpendEffect(c.effectId)).length;
+    return activeCount + Math.min(3, handCount);
+}
+
+function countOpponentMagicSpendThreats() {
+    const opp = getOpponent();
+    return opp.activeAreaEffects.filter(c => isMagicSpendEffect(c?.effectId)).length;
+}
+
+function hasExpertEffect(p: PlayerState, effectId: string) {
+    return p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === effectId);
+}
+
+function hasHandEffect(p: PlayerState, effectId: string) {
+    return p.hand.some(c => c.effectId === effectId);
+}
+
+function countHandEffects(p: PlayerState, effectIds: string[]) {
+    return p.hand.filter(c => effectIds.includes(c.effectId)).length;
+}
+
+function getDefensePressureScore(p = getCurrentPlayer()) {
+    const incomingNormal = estimateIncomingNormalDamageAfterDefense(p);
+    const incomingPiercing = estimateIncomingPiercingDamage();
+    const lowHpBonus = p.hp <= 3 ? 3 : p.hp <= 5 ? 2 : p.hp <= 8 ? 1 : 0;
+    return incomingNormal + incomingPiercing * 0.75 + lowHpBonus;
+}
+
+function getMagicNeedScore(p = getCurrentPlayer()) {
+    if (isMirageActive()) return 0;
+    const spendCount = countMagicSpendCards(p);
+    const expensiveActiveCount = p.activeAreaEffects.filter(c => {
+        const eff = c?.effectId;
+        return eff === 'flare' || eff === 'forest' || eff === 'barrier' || eff === 'soul_snatch' || eff === 'dodge';
+    }).length;
+    return spendCount + expensiveActiveCount * 1.3;
+}
+
+function aiAttrValue(attr: CardAttr, p = getCurrentPlayer()) {
+    let weight = AI_ATTR_WEIGHTS[attr.type] || 1;
+    if (attr.type === 'magic') {
+        weight += Math.min(1.25, getMagicNeedScore(p) * 0.18);
+        if (isMirageActive()) weight *= 0.35;
+    } else if (attr.type === 'defense') {
+        weight += Math.min(1.35, getDefensePressureScore(p) * 0.18);
+        if (p.hp <= 5) weight += 0.35;
+    } else if (attr.type === 'gold') {
+        if (p.hand.length <= 1) weight += 0.35;
+        if (p.board.flat().length >= 6) weight -= 0.15;
+    }
+    return weight * attr.value;
+}
+
+function areaAttrPotential(areaIdx: number, type: CardAttr['type'], p = getCurrentPlayer()) {
+    let total = 0;
+    ([areaIdx * 2 + 1, areaIdx * 2 + 2] as const).forEach(dieValue => {
+        const base = getBaseAttrForDie(currentPlayerIndex as 0 | 1, dieValue);
+        if (base.type === type) total += base.value;
+    });
+    p.board[areaIdx].forEach(card => {
+        if (card.left.type === type) total += card.left.value;
+        if (card.right.type === type) total += card.right.value;
+    });
+    return total;
+}
+
+function averageAreaDieValue(areaIdx: number, p = getCurrentPlayer()) {
+    const values = [areaIdx * 2 + 1, areaIdx * 2 + 2];
+    return values.reduce((sum, dieValue) => {
+        const isLeft = dieValue % 2 !== 0;
+        const base = getBaseAttrForDie(currentPlayerIndex as 0 | 1, dieValue);
+        let score = aiAttrValue(base, p);
+        p.board[areaIdx].forEach(card => {
+            score += aiAttrValue(isLeft ? card.left : card.right, p);
+        });
+        return sum + score;
+    }, 0) / values.length;
+}
+
+function getStrongestIncomingAttack() {
+    return Math.max(0, ...getOpponent().attackQueue.flat());
+}
+
+function getAreaIndexForEffect(p: PlayerState, effectId: string) {
+    return p.activeAreaEffects.findIndex((_, i) => getEffectiveEffectId(p, i) === effectId);
+}
+
+function aiEffectWeight(effectId: string | null | undefined) {
+    if (!effectId) return 0;
+    return AI_EFFECT_WEIGHTS[effectId] ?? 4;
+}
+
+function getAreaDiceCounts() {
+    const counts = [0, 0, 0];
+    diceResults.forEach(v => counts[Math.floor((v - 1) / 2)]++);
+    return counts;
+}
+
+function estimateDieValueForCurrentPlayer(dieValue: number) {
+    const p = getCurrentPlayer();
+    const areaIdx = Math.floor((dieValue - 1) / 2);
+    const isLeft = dieValue % 2 !== 0;
+    const base = getBaseAttrForDie(currentPlayerIndex as 0 | 1, dieValue);
+    let score = aiAttrValue(base);
+    p.board[areaIdx].forEach(card => {
+        score += aiAttrValue(isLeft ? card.left : card.right);
+    });
+    const eff = getEffectiveEffectId(p, areaIdx);
+    if (eff === 'brilliance') score += 1.5;
+    if (eff === 'gale') score += 1;
+    if (eff === 'surge' && base.type === 'magic') score += 1.5;
+    return score;
+}
+
+function chooseLowestValueDieIndex() {
+    const counts = getAreaDiceCounts();
+    const p = getCurrentPlayer();
+    const scored = diceResults.map((v, idx) => {
+        const areaIdx = Math.floor((v - 1) / 2);
+        let score = estimateDieValueForCurrentPlayer(v);
+        if (getEffectiveEffectId(p, areaIdx) === 'shadow' && counts[areaIdx] === 1) score -= 5;
+        return {idx, score};
+    });
+    const minScore = Math.min(...scored.map(x => x.score));
+    return chooseUniform(scored.filter(x => x.score === minScore)).idx;
+}
+
+function chooseExpertFateDiceIndices() {
+    const p = getCurrentPlayer();
+    const counts = getAreaDiceCounts();
+    const scored = diceResults.map((v, idx) => ({
+        idx,
+        areaIdx: Math.floor((v - 1) / 2),
+        score: estimateDieValueForCurrentPlayer(v),
+    }));
+    if (scored.length === 0) return [];
+
+    const shadowAreaIdx = getAreaIndexForEffect(p, 'shadow');
+    if (shadowAreaIdx >= 0 && counts[shadowAreaIdx] > 0 && counts[shadowAreaIdx] <= 2) {
+        return scored.filter(x => x.areaIdx === shadowAreaIdx).map(x => x.idx);
+    }
+
+    const brillianceAreaIdx = getAreaIndexForEffect(p, 'brilliance');
+    if (brillianceAreaIdx >= 0 && counts[brillianceAreaIdx] === 2) {
+        const outside = scored
+            .filter(x => x.areaIdx !== brillianceAreaIdx)
+            .sort((a, b) => a.score - b.score);
+        if (outside.length > 0) return outside.slice(0, Math.min(2, outside.length)).map(x => x.idx);
+    }
+
+    const avg = scored.reduce((sum, x) => sum + x.score, 0) / scored.length;
+    const chosen = scored
+        .filter(x => x.score < Math.max(2.4, avg * 0.82))
+        .map(x => x.idx);
+    if (chosen.length > 0) return chosen;
+    const minScore = Math.min(...scored.map(x => x.score));
+    return [chooseUniform(scored.filter(x => x.score === minScore)).idx];
+}
+
+function chooseExpertFrostDieIndex() {
+    const p = getCurrentPlayer();
+    const counts = getAreaDiceCounts();
+    const scored = diceResults.map((v, idx) => {
+        const areaIdx = Math.floor((v - 1) / 2);
+        let score = estimateDieValueForCurrentPlayer(v);
+        if (getEffectiveEffectId(p, areaIdx) === 'shadow' && counts[areaIdx] === 1) score -= 8;
+        return {idx, score};
+    });
+    const minScore = Math.min(...scored.map(x => x.score));
+    return chooseUniform(scored.filter(x => x.score === minScore)).idx;
+}
+
+function chooseExpertIllusionTargetArea() {
+    const opp = getOpponent();
+    const candidates: Array<{areaIdx: number; score: number}> = [];
+    opp.activeAreaEffects.forEach((c, areaIdx) => {
+        if (!c || ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId)) return;
+        candidates.push({areaIdx, score: aiEffectWeight(c.effectId)});
+    });
+    if (candidates.length === 0) return -1;
+    const maxScore = Math.max(...candidates.map(c => c.score));
+    return chooseUniform(candidates.filter(c => c.score === maxScore)).areaIdx;
+}
+
+function chooseExpertSelfAttackTarget(targets: Array<{areaIdx: number; hitIdx: number; val: number}>) {
+    return chooseHighestAttackTarget(targets);
+}
+
+function estimateIncomingNormalDamageAfterDefense(p = getCurrentPlayer()) {
+    const opp = getOpponent();
+    return opp.attackQueue.flat().reduce((sum, atk) => sum + Math.max(0, atk - p.defense), 0);
+}
+
+function estimateIncomingPiercingDamage() {
+    const opp = getOpponent();
+    return (opp.piercingQueue || [[], [], []]).flat().reduce((sum, atk) => sum + atk, 0);
+}
+
+function scoreCardForExpert(card: GameCard, areaIdx = -1) {
+    const p = getCurrentPlayer();
+    const defensePressure = getDefensePressureScore(p);
+    const magicNeed = getMagicNeedScore(p);
+    const mirageActive = isMirageActive();
+    const currentEff = areaIdx >= 0 ? getEffectiveEffectId(p, areaIdx) : null;
+    const coveringOwnMirage = currentEff === 'mirage' && card.effectId !== 'mirage';
+    const hasBrilliance = hasExpertEffect(p, 'brilliance') || card.effectId === 'brilliance';
+    const hasShadow = hasExpertEffect(p, 'shadow') || card.effectId === 'shadow';
+    const attackComboCount = countHandEffects(p, ['charge', 'reproduction', 'flare', 'forest', 'amplify', 'thrust', 'magic_bullet'])
+        + p.activeAreaEffects.filter(c => ['charge', 'reproduction', 'flare', 'forest', 'amplify', 'thrust', 'magic_bullet'].includes(c?.effectId || '')).length;
+    const attackAttrValue = card.left.type === 'attack' ? card.left.value : 0;
+    const attackAttrRight = card.right.type === 'attack' ? card.right.value : 0;
+    let score = aiEffectWeight(card.effectId) + aiAttrValue(card.left, p) + aiAttrValue(card.right, p);
+
+    if (isMagicSpendEffect(card.effectId)) {
+        score += Math.min(3.4, magicNeed * 0.42);
+        if (mirageActive && !coveringOwnMirage) score -= 5.5;
+        if (coveringOwnMirage) score += 3 + Math.min(3, countMagicSpendCards(p) * 0.55);
+    }
+
+    if (card.effectId === 'diversion') {
+        score += magicNeed >= 2 && !mirageActive ? Math.min(5.2, magicNeed * 0.9) : -2.4;
+        if (attackComboCount >= 2) score += 1.1;
+    }
+    if (card.effectId === 'mirage') {
+        score += countOpponentMagicSpendThreats() * 1.9;
+        score -= countMagicSpendCards(p) * 0.85;
+        if (magicNeed >= 3) score -= 2.2;
+        if (defensePressure >= 4) score += 1.2;
+    }
+    if (card.effectId === 'brilliance') {
+        const diceSupport = (hasHandEffect(p, 'fate') ? 1.2 : 0)
+            + (hasHandEffect(p, 'magic_luck') ? 1.3 : 0)
+            + (hasHandEffect(p, 'lucky') ? 0.8 : 0)
+            + (hasExpertEffect(p, 'fate') ? 1.4 : 0)
+            + (hasExpertEffect(p, 'magic_luck') ? 1.5 : 0)
+            + (hasExpertEffect(p, 'lucky') ? 0.8 : 0);
+        score += diceSupport;
+        if (hasExpertEffect(p, 'shadow')) score -= 0.7;
+    }
+    if (card.effectId === 'shadow') {
+        score += (hasExpertEffect(p, 'frost') || hasHandEffect(p, 'frost')) ? 3.2 : 0;
+        score += (hasExpertEffect(p, 'fate') || hasHandEffect(p, 'fate')) ? 1.4 : 0;
+        score += (hasExpertEffect(p, 'lucky') || hasHandEffect(p, 'lucky')) ? 0.8 : 0;
+        if (hasExpertEffect(p, 'brilliance')) score -= 0.6;
+    }
+    if (card.effectId === 'frost') score += hasShadow ? 3.4 : hasBrilliance ? 0.8 : 0.5;
+    if (card.effectId === 'fate') score += hasBrilliance ? 2.3 : hasShadow ? 1.6 : 0.4;
+    if (card.effectId === 'magic_luck') {
+        score += hasBrilliance ? 3.1 : 0.4;
+        if (hasExpertEffect(p, 'shadow') && !hasBrilliance) score -= 1.2;
+        if (magicNeed >= 4) score -= 0.8;
+    }
+    if (card.effectId === 'lucky') score += hasShadow ? 1.1 : hasBrilliance ? 0.9 : 0;
+
+    if (card.effectId === 'holy_light') score += p.hp <= 4 ? 3.4 : p.hp <= 7 ? 1.8 : 0.3;
+    if (card.effectId === 'contract') score += p.hp <= 5 ? 3.2 : p.hp <= 8 ? 1.2 : 0;
+    if (card.effectId === 'breakthrough') score += p.hp <= 4 ? 3.8 : p.hp <= 6 ? 1.2 : 0;
+    if (card.effectId === 'dodge') score += getStrongestIncomingAttack() >= 4 ? 3.2 : defensePressure >= 3 ? 1.7 : 0;
+    if (card.effectId === 'barrier') score += defensePressure >= 4 ? 2.8 : defensePressure >= 2 ? 1.1 : 0;
+    if (card.effectId === 'shield') score += defensePressure >= 3 ? 1.7 : 0.2;
+    if (card.effectId === 'backfire') score += defensePressure >= 2 ? 1.5 : 0.4;
+
+    if (card.effectId === 'magic_bullet') score += (hasExpertEffect(p, 'thrust') || hasHandEffect(p, 'thrust') ? 1.8 : 0)
+        + (hasExpertEffect(p, 'forest') || hasHandEffect(p, 'forest') ? 1.4 : 0)
+        + (hasExpertEffect(p, 'amplify') || hasHandEffect(p, 'amplify') ? 0.9 : 0);
+    if (card.effectId === 'thrust') score += (hasExpertEffect(p, 'magic_bullet') || hasHandEffect(p, 'magic_bullet') ? 2.2 : 0)
+        + (attackAttrValue + attackAttrRight >= 1 ? 0.7 : 0);
+    if (card.effectId === 'amplify') score += attackComboCount >= 2 ? 1.5 : 0.5;
+    if (card.effectId === 'forest') score += attackComboCount >= 2 ? 2.2 : 0.7;
+    if (card.effectId === 'charge') score += attackComboCount >= 1 ? 1.1 : 0.2;
+    if (card.effectId === 'flare') score += (hasExpertEffect(p, 'charge') || hasHandEffect(p, 'charge') ? 1.1 : 0)
+        + (hasExpertEffect(p, 'reproduction') || hasHandEffect(p, 'reproduction') ? 1.3 : 0);
+    if (card.effectId === 'reproduction') score += (hasExpertEffect(p, 'flare') || hasHandEffect(p, 'flare') ? 1.6 : 0)
+        + (hasExpertEffect(p, 'forest') || hasHandEffect(p, 'forest') ? 1 : 0);
+    if (card.effectId === 'surge') score += magicNeed >= 3 ? 1.5 : 0.3;
+    if (card.effectId === 'flame_shield') score += defensePressure >= 3 ? 1.3 : 0.4;
+    if (card.effectId === 'gale' || card.effectId === 'ambush') {
+        score += getOpponent().hp <= 5 ? 1.1 : 0.4;
+    }
+    if (card.effectId === 'illusion') {
+        const targetArea = chooseExpertIllusionTargetArea();
+        score += targetArea >= 0 ? aiEffectWeight(getOpponent().activeAreaEffects[targetArea]?.effectId) * 0.5 : -2.5;
+    }
+
+    if (areaIdx >= 0) {
+        score -= aiEffectWeight(currentEff) * 0.35;
+        if (card.effectId === currentEff) score -= 2;
+        if (currentEff === 'shadow' && card.effectId !== 'shadow' && !hasExpertEffect(p, 'brilliance')) score -= 1.4;
+        if (card.effectId === 'brilliance') {
+            const areaValue = averageAreaDieValue(areaIdx, p);
+            score += areaValue >= 4 ? 1.1 : 0.4;
+        }
+        if (card.effectId === 'shadow') {
+            const areaValue = averageAreaDieValue(areaIdx, p);
+            score += areaValue <= 3.2 ? 1.2 : -0.3;
+        }
+        if (card.effectId === 'surge') score += areaAttrPotential(areaIdx, 'magic', p) * 0.35;
+        if (card.effectId === 'flame_shield') score += areaAttrPotential(areaIdx, 'defense', p) * 0.35;
+    }
+
+    return score;
+}
+
+function chooseExpertPlay() {
+    const p = getCurrentPlayer();
+    if (p.hand.length === 0) return null;
+    let best: {handIdx: number; areaIdx: number; score: number} | null = null;
+
+    p.hand.forEach((card, handIdx) => {
+        for (let areaIdx = 0; areaIdx < 3; areaIdx++) {
+            const score = scoreCardForExpert(card, areaIdx) + Math.random() * 0.15;
+            if (!best || score > best.score) best = {handIdx, areaIdx, score};
+        }
+    });
+
+    return best;
+}
+
+function chooseExpertPlayCount() {
+    const p = getCurrentPlayer();
+    if (inPreparationPhase) return 1;
+    if (p.hand.length <= 1) return 1;
+    const bestHandScore = Math.max(...p.hand.map(c => scoreCardForExpert(c)));
+    const activeBrilliance = hasExpertEffect(p, 'brilliance');
+    const activeShadow = hasExpertEffect(p, 'shadow');
+    if (activeBrilliance && !activeShadow) return 1;
+    if (activeShadow && !activeBrilliance && p.hand.length >= 5) return 2;
+    if (p.hand.length >= 5 && bestHandScore >= 7.5) return 3;
+    if (p.hand.length >= 3 && bestHandScore >= 8.2) return 2;
+    if (p.cardsPlayedThisTurn === 0 && p.board.flat().length < 3) return Math.min(2, p.hand.length);
+    return 1;
+}
+
+function chooseExpertRollCount(rollOptions: number[]) {
+    const p = getCurrentPlayer();
+    const maxRolls = Math.max(...rollOptions);
+    const shadowAreas = p.activeAreaEffects.filter((_, i) => getEffectiveEffectId(p, i) === 'shadow').length;
+    const brillianceAreas = p.activeAreaEffects.filter((_, i) => getEffectiveEffectId(p, i) === 'brilliance').length;
+    if (brillianceAreas > shadowAreas) return maxRolls;
+    if (brillianceAreas > 0) return maxRolls;
+    return maxRolls;
+}
+
+function getExpertActivationEffectId(label: string) {
+    if (label.includes('奪魂')) return 'soul_snatch';
+    if (label.includes('聖光')) return 'holy_light';
+    if (label.includes('閃避')) return 'dodge';
+    if (label.includes('屏障')) return 'barrier';
+    if (label.includes('護盾')) return 'shield';
+    if (label.includes('森林')) return 'forest';
+    if (label.includes('閃光')) return 'flare';
+    if (label.includes('充能')) return 'charge';
+    if (label.includes('再現')) return 'reproduction';
+    if (label.includes('魔彈')) return 'magic_bullet';
+    if (label.includes('增幅')) return 'amplify';
+    if (label.includes('突刺')) return 'thrust';
+    if (label.includes('命運')) return 'fate';
+    if (label.includes('魔運')) return 'magic_luck';
+    if (label.includes('冰霜')) return 'frost';
+    if (label.includes('幻象')) return 'illusion';
+    return '';
+}
+
+function getExpertMagicCost(effectId: string) {
+    if (effectId === 'magic_bullet' || effectId === 'illusion') return 1;
+    if (effectId === 'charge' || effectId === 'reproduction' || effectId === 'shield' || effectId === 'holy_light' || effectId === 'magic_luck') return 2;
+    if (effectId === 'flare' || effectId === 'forest' || effectId === 'dodge' || effectId === 'barrier' || effectId === 'soul_snatch') return 3;
+    return 0;
+}
+
+type ExpertMagicPlan = {
+    planned: Record<string, number>;
+    reserved: number;
+};
+
+function buildExpertMagicPlan(): ExpertMagicPlan {
+    const p = getCurrentPlayer();
+    const planned: Record<string, number> = {};
+    if (p.magic <= 0 || isMirageActive()) return {planned, reserved: 0};
+
+    const candidates: Array<{effectId: string; cost: number; score: number; priority: number}> = [];
+    const canPlanPhase = (phase: number) => currentPhaseIndex <= phase;
+    const add = (effectId: string, score: number, priority = 0, uses = 1, decay = 1.15) => {
+        const cost = getExpertMagicCost(effectId);
+        if (cost <= 0 || score < 2.75) return;
+        for (let i = 0; i < uses; i++) {
+            candidates.push({effectId, cost, score: Math.max(0, score - i * decay), priority});
+        }
+    };
+
+    if (canPlanPhase(2)) {
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'magic_luck' && !p.magicLuckUsedIndices.includes(i))) {
+            add('magic_luck', scoreActivationForExpertRaw('魔運'), 5);
+        }
+        if (p.activeAreaEffects.some((c, i) => c?.effectId === 'illusion' && !p.illusionUsedIndices.includes(i)) && chooseExpertIllusionTargetArea() >= 0) {
+            add('illusion', scoreActivationForExpertRaw('幻象'), 4);
+        }
+    }
+
+    if (canPlanPhase(3)) {
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'dodge' && !p.evasionUsedIndices.includes(i)) && listOpponentDodgeTargets().length > 0) {
+            add('dodge', scoreActivationForExpertRaw('閃避'), 8);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'barrier' && !p.barrierUsedIndices.includes(i))) {
+            add('barrier', scoreActivationForExpertRaw('屏障'), 7);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'shield')) {
+            const incoming = Math.max(0, estimateIncomingNormalDamageAfterDefense(p));
+            add('shield', scoreActivationForExpertRaw('護盾'), 6, Math.min(2, Math.ceil(incoming)));
+        }
+    }
+
+    if (canPlanPhase(5)) {
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'soul_snatch')) {
+            const uses = Math.min(3, Math.ceil(Math.max(1, getOpponent().hp) / 2));
+            add('soul_snatch', scoreActivationForExpertRaw('奪魂'), 6, uses);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'holy_light')) {
+            const hpNeed = p.hp <= 7 ? 2 : 1;
+            add('holy_light', Math.max(scoreActivationForExpertRaw('聖光'), currentPhaseIndex >= 4 ? 3.2 : 1), 2, hpNeed);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'magic_bullet')) {
+            add('magic_bullet', scoreActivationForExpertRaw('魔彈'), 3, Math.min(4, p.magic), 4.6);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'forest' && !p.forestUsedIndices.includes(i)) && hasAnyAttackTarget(p)) {
+            add('forest', scoreActivationForExpertRaw('森林'), 5);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'flare' && !p.flareUsedIndices.includes(i)) && hasAnyAttackTarget(p)) {
+            add('flare', scoreActivationForExpertRaw('閃光'), 5);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'reproduction' && !p.reproductionUsedIndices.includes(i)) && hasAnyAttackTarget(p)) {
+            add('reproduction', scoreActivationForExpertRaw('再現'), 4);
+        }
+        if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'charge' && !p.chargeUsedIndices.includes(i)) && hasAnyAttackTarget(p)) {
+            add('charge', scoreActivationForExpertRaw('充能'), 4);
+        }
+    }
+
+    candidates.sort((a, b) => {
+        const ar = a.score / a.cost + a.score * 0.08 + a.priority * 0.12;
+        const br = b.score / b.cost + b.score * 0.08 + b.priority * 0.12;
+        return br - ar;
+    });
+
+    let remaining = p.magic;
+    for (const candidate of candidates) {
+        if (candidate.cost > remaining) continue;
+        planned[candidate.effectId] = (planned[candidate.effectId] || 0) + 1;
+        remaining -= candidate.cost;
+    }
+
+    return {planned, reserved: p.magic - remaining};
+}
+
+function scoreActivationForExpert(label: string) {
+    const raw = scoreActivationForExpertRaw(label);
+    const effectId = getExpertActivationEffectId(label);
+    const cost = getExpertMagicCost(effectId);
+    if (cost <= 0) return raw;
+
+    const plan = buildExpertMagicPlan();
+    if ((plan.planned[effectId] || 0) > 0) return raw + 0.35;
+
+    if (currentPhaseIndex >= 5 && raw >= 3.2 && getCurrentPlayer().magic >= cost) {
+        return Math.max(2.85, raw * 0.72);
+    }
+    return Math.min(raw, 2.35);
+}
+
+function scoreActivationForExpertRaw(label: string) {
+    const p = getCurrentPlayer();
+    const opp = getOpponent();
+    const maxSelfAttack = Math.max(0, ...listSelfAttackHitTargets().map(t => t.val));
+    const totalSelfAttack = p.currentAttacks.flat().reduce((a, b) => a + Math.max(0, b), 0);
+    const selfAttackCount = listSelfAttackHitTargets().length;
+    const thrustTargetCount = p.currentAttacks.flat().filter(v => v > 0 && v <= 2).length;
+    const incomingNormal = estimateIncomingNormalDamageAfterDefense(p);
+    const incomingPiercing = estimateIncomingPiercingDamage();
+    const hasUnusedThrust = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'thrust' && !p.thrustUsedIndices.includes(i));
+    const hasUnusedAmplify = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'amplify' && !p.amplifyUsedIndices.includes(i));
+    const hasUnusedForest = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'forest' && !p.forestUsedIndices.includes(i));
+    const hasUnusedCharge = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'charge' && !p.chargeUsedIndices.includes(i));
+    const hasUnusedReproduction = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'reproduction' && !p.reproductionUsedIndices.includes(i));
+    const hasUnusedFlare = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'flare' && !p.flareUsedIndices.includes(i));
+    const hasMagicBullet = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'magic_bullet');
+    const expensiveAttackFinisherWaiting = maxSelfAttack > 0 && (hasUnusedForest || hasUnusedCharge || hasUnusedReproduction || hasUnusedFlare);
+    const reserveMagicForFinisher = expensiveAttackFinisherWaiting
+        ? (hasUnusedFlare || hasUnusedForest ? 3 : 2)
+        : 0;
+    const canPreloadMagicBullet = hasMagicBullet && p.magic > reserveMagicForFinisher;
+
+    if (label.includes('奪魂')) {
+        if (opp.hp <= 1) return 20;
+        return 7 + (opp.hp <= 3 ? 4 : 0) + (p.hp <= 4 ? 2.5 : p.hp <= 7 ? 1 : 0);
+    }
+    if (label.includes('聖光')) {
+        return p.hp <= 4 ? 9 : p.hp <= 7 ? 5.2 : p.hp <= 10 && incomingNormal + incomingPiercing > 0 ? 3.2 : 1.2;
+    }
+    if (label.includes('閃避')) {
+        const strongest = Math.max(0, ...listOpponentDodgeTargets().map(t => t.val));
+        const prevent = Math.max(0, strongest - p.defense);
+        return prevent >= 4 || incomingNormal >= 4 ? 10 + strongest : prevent >= 2 || incomingNormal >= 2 ? 7 + prevent : 1.8;
+    }
+    if (label.includes('屏障')) {
+        return incomingNormal >= 4 ? 9 + incomingNormal : incomingNormal >= 2 ? 6.5 : 1.2;
+    }
+    if (label.includes('護盾')) {
+        return incomingNormal >= 2 ? 5.5 + incomingNormal : incomingNormal === 1 && p.hp <= 5 ? 3.5 : 1;
+    }
+    if (label.includes('森林')) {
+        if (canPreloadMagicBullet && p.magic > 3) return 2.6;
+        if (hasUnusedThrust && thrustTargetCount > 0) return 2.2;
+        if (hasUnusedAmplify && selfAttackCount >= 2) return 2.4;
+        return selfAttackCount >= 2 && totalSelfAttack >= 5 ? 9.4 + totalSelfAttack * 0.25 : selfAttackCount >= 2 ? 5.2 : 1.4;
+    }
+    if (label.includes('閃光')) {
+        if (canPreloadMagicBullet && p.magic > 3) return 2.7;
+        if (hasUnusedForest && selfAttackCount >= 2 && totalSelfAttack > maxSelfAttack) return 2.4;
+        if (hasUnusedCharge && p.magic >= 5 && maxSelfAttack <= 5) return 2.5;
+        return maxSelfAttack >= 5 ? 10 + maxSelfAttack * 0.35 : maxSelfAttack >= 3 ? 7.8 + maxSelfAttack * 0.2 : 2;
+    }
+    if (label.includes('充能')) {
+        if (canPreloadMagicBullet && p.magic > 2) return 2.7;
+        if (hasUnusedForest && selfAttackCount >= 2 && totalSelfAttack > maxSelfAttack) return 2.5;
+        return maxSelfAttack >= 4 ? 8.6 + maxSelfAttack * 0.2 : maxSelfAttack >= 1 ? 6.4 : 1.5;
+    }
+    if (label.includes('再現')) {
+        if (canPreloadMagicBullet && p.magic > 2) return 2.7;
+        if (hasUnusedForest && selfAttackCount >= 2 && totalSelfAttack > maxSelfAttack) return 2.5;
+        if (hasUnusedFlare && p.magic >= 5 && maxSelfAttack >= 3) return 2.6;
+        return maxSelfAttack >= 5 ? 9.6 + maxSelfAttack * 0.28 : maxSelfAttack >= 2 ? 7.5 + maxSelfAttack * 0.2 : 2.2;
+    }
+    if (label.includes('魔彈')) {
+        const reserveMagic = reserveMagicForFinisher;
+        if (p.magic <= reserveMagic && !(hasUnusedThrust && p.magic > 0)) return 1.6;
+        return 12
+            + (hasUnusedThrust ? 4.6 : 0)
+            + (hasUnusedAmplify ? 1.1 : 0)
+            + (hasUnusedForest ? 1.1 : 0)
+            + (p.magic > reserveMagic + 1 ? 0.7 : 0);
+    }
+    if (label.includes('增幅')) {
+        if (canPreloadMagicBullet && p.magic > reserveMagicForFinisher) return 2.6;
+        if (hasUnusedThrust && thrustTargetCount > 0) return 2.4;
+        return selfAttackCount >= 2 ? 9.2 + selfAttackCount : selfAttackCount === 1 ? 6.2 : 1;
+    }
+    if (label.includes('突刺')) {
+        return thrustTargetCount >= 2 ? 10 + thrustTargetCount : thrustTargetCount === 1 ? 7.2 : 0;
+    }
+    if (label.includes('命運')) {
+        const rerollCount = chooseExpertFateDiceIndices().length;
+        const counts = getAreaDiceCounts();
+        const brillianceAlmost = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'brilliance' && counts[i] === 2);
+        const shadowBlocked = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'shadow' && counts[i] > 0 && counts[i] <= 2);
+        return brillianceAlmost || shadowBlocked ? 8.2 : rerollCount >= 2 ? 6.5 : 3.4;
+    }
+    if (label.includes('魔運')) {
+        const counts = getAreaDiceCounts();
+        const brillianceAlmost = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'brilliance' && counts[i] === 2);
+        const hasBrilliance = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'brilliance');
+        const hasShadow = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'shadow');
+        return brillianceAlmost ? 8 : hasBrilliance && !hasShadow ? 5.2 : hasShadow ? 1.5 : 3;
+    }
+    if (label.includes('冰霜')) {
+        const hasShadow = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'shadow');
+        if (hasShadow) return 8.6;
+        const lowest = diceResults.length > 0 ? Math.min(...diceResults.map(v => estimateDieValueForCurrentPlayer(v))) : 99;
+        return lowest <= 2.5 ? 4.6 : 2.4;
+    }
+    if (label.includes('幻象')) {
+        const target = chooseExpertIllusionTargetArea();
+        return target >= 0 ? 5 + aiEffectWeight(getOpponent().activeAreaEffects[target]?.effectId) : 0;
+    }
+    return 3;
+}
+
 function getAvailableActivationsForCurrentPlayer() {
     // Return list of "thunks" that, when called, will start an activation.
     // Some activations will open selection modes; AI will then resolve targets in subsequent steps.
@@ -1094,6 +1759,8 @@ function getAvailableActivationsForCurrentPlayer() {
 }
 
 async function aiResolveSelectionModesStep() {
+    if (computerAiDifficulty === 'expert') return aiResolveExpertSelectionModesStep();
+
     // Resolve any active selection mode with uniform random target.
     // Returns true if it performed an action.
 
@@ -1125,11 +1792,11 @@ async function aiResolveSelectionModesStep() {
         return true;
     }
 
-    // Evasion: pick one opponent attack hit
+    // Evasion: usually pick one of the opponent's highest attack hits
     if (evasionSelectionMode) {
         const targets = listOpponentDodgeTargets();
         if (targets.length > 0) {
-            const t = chooseUniform(targets);
+            const t = chooseAiWeightedAttackTarget(targets);
             logAi(`${getAiName()} 使用閃避：無視對手區域${t.areaIdx + 1} 的攻擊(${t.val})`);
             await sleep(randInt(350, 650));
             targetEvasion(t.areaIdx, t.hitIdx);
@@ -1170,11 +1837,11 @@ async function aiResolveSelectionModesStep() {
         return true;
     }
 
-    // Charge: choose one of self attacks
+    // Charge: usually pick one of self highest attacks
     if (chargeSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
-            const t = chooseUniform(targets);
+            const t = chooseAiSelfAttackTarget(targets);
             logAi(`${getAiName()} 充能：強化區域${t.areaIdx + 1} 攻擊(${t.val})`);
             await sleep(randInt(350, 650));
             useCharge(t.areaIdx, t.hitIdx);
@@ -1184,11 +1851,11 @@ async function aiResolveSelectionModesStep() {
         return false;
     }
 
-    // Reproduction: choose one of self attacks
+    // Reproduction: usually pick one of self highest attacks
     if (reproductionSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
-            const t = chooseUniform(targets);
+            const t = chooseAiSelfAttackTarget(targets);
             logAi(`${getAiName()} 再現：複製區域${t.areaIdx + 1} 攻擊(${t.val})`);
             await sleep(randInt(350, 650));
             targetReproduction(t.areaIdx, t.hitIdx);
@@ -1198,11 +1865,11 @@ async function aiResolveSelectionModesStep() {
         return false;
     }
 
-    // Flare: choose one of self attacks
+    // Flare: usually pick one of self highest attacks
     if (flareSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
-            const t = chooseUniform(targets);
+            const t = chooseAiSelfAttackTarget(targets);
             logAi(`${getAiName()} 閃光：翻倍區域${t.areaIdx + 1} 攻擊(${t.val})`);
             await sleep(randInt(350, 650));
             targetFlare(t.areaIdx, t.hitIdx);
@@ -1215,7 +1882,104 @@ async function aiResolveSelectionModesStep() {
     return false;
 }
 
+async function aiResolveExpertSelectionModesStep() {
+    if (luckySelectionMode && diceResults.length > 0) {
+        const idx = chooseLowestValueDieIndex();
+        logAi(`${getAiName()} 專家判斷：移除低價值骰子 #${idx + 1}(${diceResults[idx]})`);
+        await sleep(randInt(280, 500));
+        removeLuckyDie(idx);
+        return true;
+    }
+
+    if (fateSelectionMode && diceResults.length > 0) {
+        const chosen = chooseExpertFateDiceIndices();
+        logAi(`${getAiName()} 專家判斷：重擲 ${chosen.length} 顆低價值骰（#${chosen.map(i => i + 1).join(',')}）`);
+        await sleep(randInt(280, 500));
+        chosen.forEach(i => toggleDiceIndexSelection(i));
+        await sleep(randInt(180, 320));
+        confirmFate();
+        return true;
+    }
+
+    if (evasionSelectionMode) {
+        const targets = listOpponentDodgeTargets();
+        if (targets.length > 0) {
+            const t = chooseHighestAttackTarget(targets);
+            logAi(`${getAiName()} 專家閃避：優先無視最高攻擊 ${t.val}`);
+            await sleep(randInt(280, 500));
+            targetEvasion(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        evasionSelectionMode = false;
+        return false;
+    }
+
+    if (illusionSelectionMode) {
+        const aIdx = chooseExpertIllusionTargetArea();
+        if (aIdx >= 0) {
+            const name = getOpponent().activeAreaEffects[aIdx]?.effectName || '未知';
+            logAi(`${getAiName()} 專家幻象：複製高價值效果「${name}」`);
+            await sleep(randInt(280, 500));
+            targetIllusion(aIdx);
+            return true;
+        }
+        illusionSelectionMode = false;
+        return false;
+    }
+
+    if (frostSelectionMode && diceResults.length > 0) {
+        const idx = chooseExpertFrostDieIndex();
+        logAi(`${getAiName()} 專家冰霜：捨棄最適合的骰子 #${idx + 1}(${diceResults[idx]})`);
+        await sleep(randInt(280, 500));
+        targetFrost(idx);
+        return true;
+    }
+
+    if (chargeSelectionMode) {
+        const targets = listSelfAttackHitTargets();
+        if (targets.length > 0) {
+            const t = chooseExpertSelfAttackTarget(targets);
+            logAi(`${getAiName()} 專家充能：強化最高攻擊 ${t.val}`);
+            await sleep(randInt(280, 500));
+            useCharge(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        chargeSelectionMode = false;
+        return false;
+    }
+
+    if (reproductionSelectionMode) {
+        const targets = listSelfAttackHitTargets();
+        if (targets.length > 0) {
+            const t = chooseExpertSelfAttackTarget(targets);
+            logAi(`${getAiName()} 專家再現：複製最高攻擊 ${t.val}`);
+            await sleep(randInt(280, 500));
+            targetReproduction(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        reproductionSelectionMode = false;
+        return false;
+    }
+
+    if (flareSelectionMode) {
+        const targets = listSelfAttackHitTargets();
+        if (targets.length > 0) {
+            const t = chooseExpertSelfAttackTarget(targets);
+            logAi(`${getAiName()} 專家閃光：翻倍最高攻擊 ${t.val}`);
+            await sleep(randInt(280, 500));
+            targetFlare(t.areaIdx, t.hitIdx);
+            return true;
+        }
+        flareSelectionMode = false;
+        return false;
+    }
+
+    return false;
+}
+
 async function aiActivationLoopStep() {
+    if (computerAiDifficulty === 'expert') return aiExpertActivationLoopStep();
+
     // If there are any available activations, 90% chance to activate ONE.
     const acts = getAvailableActivationsForCurrentPlayer();
     if (acts.length === 0) return false;
@@ -1231,7 +1995,31 @@ async function aiActivationLoopStep() {
     return true;
 }
 
+async function aiExpertActivationLoopStep() {
+    const acts = getAvailableActivationsForCurrentPlayer();
+    if (acts.length === 0) return false;
+
+    const scored = acts.map(act => ({
+        act,
+        score: scoreActivationForExpert(act.label) + Math.random() * 0.1,
+    })).filter(x => x.score >= 2.75);
+
+    if (scored.length === 0) {
+        await sleep(randInt(140, 260));
+        return false;
+    }
+
+    const maxScore = Math.max(...scored.map(x => x.score));
+    const chosen = chooseUniform(scored.filter(x => x.score === maxScore)).act;
+    logAi(`${getAiName()} 專家發動：${chosen.label}`);
+    await sleep(randInt(280, 520));
+    chosen.run();
+    return true;
+}
+
 async function aiDoPlayPhase() {
+    if (computerAiDifficulty === 'expert') return aiExpertDoPlayPhase();
+
     const p = getCurrentPlayer();
     if (currentPhaseIndex !== 0) return;
 
@@ -1277,7 +2065,48 @@ async function aiDoPlayPhase() {
     nextPhase();
 }
 
+async function aiExpertDoPlayPhase() {
+    const p = getCurrentPlayer();
+    if (currentPhaseIndex !== 0) return;
+
+    if (p.hand.length === 0) {
+        logAi(`${getAiName()} 專家判斷：無手牌，進入擲骰`);
+        await sleep(randInt(160, 300));
+        nextPhase();
+        return;
+    }
+
+    const maxPlays = inPreparationPhase ? 1 : Math.min(3, p.hand.length);
+    const playCount = Math.min(maxPlays, Math.max(1, chooseExpertPlayCount()));
+    logAi(`${getAiName()} 專家出牌：規劃打出 ${playCount} 張`);
+    await sleep(randInt(250, 450));
+
+    for (let i = 0; i < playCount; i++) {
+        const choice = chooseExpertPlay();
+        if (!choice) break;
+        const cardName = p.hand[choice.handIdx]?.effectName || '未知';
+        selectedHandCardIndex = choice.handIdx;
+        logAi(`${getAiName()} 專家出牌：「${cardName}」→ 區域${choice.areaIdx + 1}`);
+        await sleep(randInt(260, 480));
+        playToBoard(choice.areaIdx);
+        await sleep(randInt(160, 300));
+        if (inPreparationPhase) break;
+    }
+
+    if (inPreparationPhase && players[1].cardsPlayedThisTurn >= 1) {
+        logAi(`${getAiName()} 專家準備完成：開始遊戲`);
+        await sleep(randInt(240, 420));
+        finishPreparationPhase();
+        return;
+    }
+
+    await sleep(randInt(160, 280));
+    nextPhase();
+}
+
 async function aiDoRollPhase() {
+    if (computerAiDifficulty === 'expert') return aiExpertDoRollPhase();
+
     if (currentPhaseIndex !== 1) return;
     if (diceResults.length > 0) {
         // Already rolled; go to judging
@@ -1297,7 +2126,28 @@ async function aiDoRollPhase() {
     rollDice(count);
 }
 
+async function aiExpertDoRollPhase() {
+    if (currentPhaseIndex !== 1) return;
+    if (diceResults.length > 0) {
+        await sleep(randInt(160, 280));
+        nextPhase();
+        return;
+    }
+
+    const p = getCurrentPlayer();
+    const shouldRollFiveBecauseNoHand = p.hand.length === 0 && p.cardsPlayedThisTurn === 0;
+    const rollOptions = shouldRollFiveBecauseNoHand
+        ? [5]
+        : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
+    const count = chooseExpertRollCount(rollOptions);
+    logAi(`${getAiName()} 專家擲骰：選擇 ${count} 顆`);
+    await sleep(randInt(240, 420));
+    rollDice(count);
+}
+
 async function aiDoBuyPhase() {
+    if (computerAiDifficulty === 'expert') return aiExpertDoBuyPhase();
+
     if (currentPhaseIndex !== 6) return;
     const p = getCurrentPlayer();
 
@@ -1309,7 +2159,7 @@ async function aiDoBuyPhase() {
         return;
     }
 
-    // Build action list: buy deck (if can), buy market slots (if can), or end
+    // Build action list: paid deck draw (if can) and market slots (if can).
     const actions: Array<{label: string; run: () => void}> = [];
     const nextDrawIndex = buyDeckDrawCount + 1;
     const nextDrawCost = getDeckDrawCost(nextDrawIndex);
@@ -1325,12 +2175,64 @@ async function aiDoBuyPhase() {
         actions.push({label: `買市場(價格${price})「${c.effectName}」`, run: () => buyMarketCard(idx)});
     });
 
-    // Always allow end
-    actions.push({label: '結束回合', run: () => nextPhase()});
+    if (actions.length === 0) {
+        logAi(`${getAiName()} 購買階段：沒有足夠金錢繼續購買，結束購買`);
+        await sleep(randInt(350, 700));
+        nextPhase();
+        return;
+    }
 
     const chosen = chooseUniform(actions);
     logAi(`${getAiName()} 購買決策：${chosen.label}`);
     await sleep(randInt(350, 700));
+    chosen.run();
+}
+
+async function aiExpertDoBuyPhase() {
+    if (currentPhaseIndex !== 6) return;
+    const p = getCurrentPlayer();
+
+    if (deck.length > 0 && buyDeckDrawCount < 1) {
+        logAi(`${getAiName()} 專家購買：先抽免費牌`);
+        await sleep(randInt(240, 420));
+        buyFromDeck();
+        return;
+    }
+
+    const actions: Array<{label: string; score: number; run: () => void}> = [];
+    const nextDrawIndex = buyDeckDrawCount + 1;
+    const nextDrawCost = getDeckDrawCost(nextDrawIndex);
+    if (deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
+        actions.push({
+            label: `抽牌庫(-${nextDrawCost}金)`,
+            score: 5.8 - nextDrawCost * 1.1 + Math.random() * 0.1,
+            run: () => buyFromDeck(),
+        });
+    }
+
+    ([0, 1, 2] as const).forEach((idx) => {
+        const c = market[idx];
+        if (!c) return;
+        const price = getMarketPrice(idx);
+        if (p.gold < price) return;
+        actions.push({
+            label: `買市場(價格${price})「${c.effectName}」`,
+            score: scoreCardForExpert(c) - price * 1.35 + Math.random() * 0.1,
+            run: () => buyMarketCard(idx),
+        });
+    });
+
+    if (actions.length === 0) {
+        logAi(`${getAiName()} 專家購買：沒有可買選項，結束購買`);
+        await sleep(randInt(240, 420));
+        nextPhase();
+        return;
+    }
+
+    const maxScore = Math.max(...actions.map(a => a.score));
+    const chosen = chooseUniform(actions.filter(a => a.score === maxScore));
+    logAi(`${getAiName()} 專家購買：${chosen.label}`);
+    await sleep(randInt(280, 500));
     chosen.run();
 }
 
