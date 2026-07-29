@@ -183,6 +183,27 @@ const AI_ATTR_WEIGHTS: Record<string, number> = {
   gold: 1.15,
 };
 
+// Each die lands in one of the three areas with equal probability.
+const DIE_AREA_PROBABILITY = 1 / 3;
+const SHADOW_PIERCING_DAMAGE = 3;
+const BRILLIANCE_ATTACK_BONUS = 7;
+const BRILLIANCE_DICE_REQUIRED = 3;
+// Shadow damage ignores defense, so it is worth a bit more than plain attack.
+const PIERCING_DAMAGE_MULTIPLIER = 1.15;
+
+// P(X >= successes) for X ~ Binomial(trials, probability)
+function binomialProbAtLeast(successes: number, trials: number, probability: number) {
+  if (successes <= 0) return 1;
+  if (successes > trials) return 0;
+  let cumulative = 0;
+  let term = Math.pow(1 - probability, trials);
+  for (let i = 0; i < successes; i++) {
+    cumulative += term;
+    term = term * ((trials - i) / (i + 1)) * (probability / (1 - probability));
+  }
+  return Math.max(0, 1 - cumulative);
+}
+
 const MAGIC_SPEND_EFFECT_IDS = new Set([
   'charge',
   'reproduction',
@@ -776,14 +797,42 @@ class SimulationGame {
     return 1;
   }
 
+  private averageDieScoreForCurrentPlayer() {
+    let total = 0;
+    for (let dieValue = 1; dieValue <= 6; dieValue++) {
+      total += this.estimateDieValueForCurrentPlayer(dieValue);
+    }
+    return total / 6;
+  }
+
   private chooseExpertRollCount(rollOptions: number[]) {
+    if (rollOptions.length <= 1) return rollOptions[0];
+
     const p = this.currentPlayer();
-    const maxRolls = Math.max(...rollOptions);
-    const shadowAreas = p.activeAreaEffects.filter((_, i) => this.getEffectiveEffectId(p, i) === 'shadow').length;
-    const brillianceAreas = p.activeAreaEffects.filter((_, i) => this.getEffectiveEffectId(p, i) === 'brilliance').length;
-    if (brillianceAreas > shadowAreas) return maxRolls;
-    if (brillianceAreas > 0) return maxRolls;
-    return maxRolls;
+    const areaIndices = [0, 1, 2] as const;
+    const shadowAreas = areaIndices.filter(i => this.getEffectiveEffectId(p, i) === 'shadow').length;
+    const brillianceAreas = areaIndices.filter(i => this.getEffectiveEffectId(p, i) === 'brilliance').length;
+    const avgDieScore = this.averageDieScoreForCurrentPlayer();
+    const attackWeight = AI_ATTR_WEIGHTS.attack;
+
+    const scored = rollOptions.map(count => {
+      // More dice means more attribute income.
+      let score = count * avgDieScore;
+      // Shadow only triggers on an EMPTY area, so fewer dice make it more likely.
+      if (shadowAreas > 0) {
+        score += shadowAreas * SHADOW_PIERCING_DAMAGE * attackWeight * PIERCING_DAMAGE_MULTIPLIER
+          * Math.pow(1 - DIE_AREA_PROBABILITY, count);
+      }
+      // Brilliance needs 3+ dice in one area, so more dice make it more likely.
+      if (brillianceAreas > 0) {
+        score += brillianceAreas * BRILLIANCE_ATTACK_BONUS * attackWeight
+          * binomialProbAtLeast(BRILLIANCE_DICE_REQUIRED, count, DIE_AREA_PROBABILITY);
+      }
+      return {count, score};
+    });
+
+    const maxScore = Math.max(...scored.map(s => s.score));
+    return chooseUniform(scored.filter(s => s.score === maxScore)).count;
   }
 
   private estimateIncomingNormalDamageAfterDefense(p = this.currentPlayer()) {

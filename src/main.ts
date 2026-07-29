@@ -73,6 +73,12 @@ function getCardPngUrlByImgNo(imgNo: number) {
     return `cards/${getCardPngFileName(imgNo)}`;
 }
 
+// Relative path for the same reason as getCardPngUrlByImgNo (Vite `base`).
+const COVER_IMG_URL = 'cover/pixel_duel_cover.jpg';
+
+// Physical board game rulebook (PDF hosted on Google Drive).
+const PHYSICAL_RULEBOOK_URL = 'https://drive.google.com/file/d/1ep-OoATJueR2ji2Bd_OXz4bokXQs7l-7/view?usp=drivesdk';
+
 function getImgNoForEffectId(effectId: string) {
     const def = CARD_DEFS.find(d => d.effectId === effectId);
     return def?.imgNo ?? 0;
@@ -645,10 +651,19 @@ function renderHomeScreen() {
 
     wrap.innerHTML = `
         <div class="w-full max-w-3xl">
-            <div class="text-center">
-                <div class="text-[12px] font-black tracking-[0.45em] text-indigo-200 uppercase">PIXEL DUEL</div>
-                <div class="mt-2 text-4xl sm:text-5xl font-black tracking-tight">像素對決</div>
-                <div class="mt-3 text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
+            <div class="flex justify-center">
+                <img
+                    src="${COVER_IMG_URL}"
+                    alt="像素對決 PIXEL DUEL 封面"
+                    class="w-full max-w-[300px] sm:max-w-[360px] rounded-2xl border border-white/15 shadow-xl shadow-black/40 select-none"
+                    draggable="false"
+                    loading="eager"
+                    decoding="async"
+                />
+            </div>
+
+            <div class="mt-6 text-center">
+                <div class="text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
             </div>
 
             <div class="mt-6 flex justify-center">
@@ -712,7 +727,22 @@ function renderRulesScreen() {
                 <button id="backHome" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">返回首頁</button>
             </div>
 
-            <div class="mt-6 space-y-4 text-slate-200/90">
+            <a
+                id="physicalRulebookBtn"
+                href="${PHYSICAL_RULEBOOK_URL}"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="mt-6 flex items-center justify-between gap-3 rounded-2xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 px-5 py-4 shadow-lg shadow-black/20 transition-all active:scale-[0.99]"
+            >
+                <div>
+                    <div class="text-[9px] font-black tracking-[0.3em] text-amber-200 uppercase">PDF</div>
+                    <div class="mt-1 text-lg font-black text-white">實體桌遊說明書</div>
+                    <div class="mt-1 text-[11px] font-bold text-amber-100/90">開啟完整規則書（另開新分頁）</div>
+                </div>
+                <div class="text-2xl text-amber-200 shrink-0" aria-hidden="true">↗</div>
+            </a>
+
+            <div class="mt-4 space-y-4 text-slate-200/90">
                 <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
                     <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">勝利條件</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
@@ -1408,14 +1438,63 @@ function chooseExpertPlayCount() {
     return 1;
 }
 
+// Each die lands in one of the three areas with equal probability.
+const DIE_AREA_PROBABILITY = 1 / 3;
+const SHADOW_PIERCING_DAMAGE = 3;
+const BRILLIANCE_ATTACK_BONUS = 7;
+const BRILLIANCE_DICE_REQUIRED = 3;
+// Shadow damage ignores defense, so it is worth a bit more than plain attack.
+const PIERCING_DAMAGE_MULTIPLIER = 1.15;
+
+function averageDieScoreForCurrentPlayer() {
+    let total = 0;
+    for (let dieValue = 1; dieValue <= 6; dieValue++) {
+        total += estimateDieValueForCurrentPlayer(dieValue);
+    }
+    return total / 6;
+}
+
+// P(X >= successes) for X ~ Binomial(trials, probability)
+function binomialProbAtLeast(successes: number, trials: number, probability: number) {
+    if (successes <= 0) return 1;
+    if (successes > trials) return 0;
+    let cumulative = 0;
+    let term = Math.pow(1 - probability, trials);
+    for (let i = 0; i < successes; i++) {
+        cumulative += term;
+        term = term * ((trials - i) / (i + 1)) * (probability / (1 - probability));
+    }
+    return Math.max(0, 1 - cumulative);
+}
+
 function chooseExpertRollCount(rollOptions: number[]) {
+    if (rollOptions.length <= 1) return rollOptions[0];
+
     const p = getCurrentPlayer();
-    const maxRolls = Math.max(...rollOptions);
-    const shadowAreas = p.activeAreaEffects.filter((_, i) => getEffectiveEffectId(p, i) === 'shadow').length;
-    const brillianceAreas = p.activeAreaEffects.filter((_, i) => getEffectiveEffectId(p, i) === 'brilliance').length;
-    if (brillianceAreas > shadowAreas) return maxRolls;
-    if (brillianceAreas > 0) return maxRolls;
-    return maxRolls;
+    const areaIndices = [0, 1, 2] as const;
+    const shadowAreas = areaIndices.filter(i => getEffectiveEffectId(p, i) === 'shadow').length;
+    const brillianceAreas = areaIndices.filter(i => getEffectiveEffectId(p, i) === 'brilliance').length;
+    const avgDieScore = averageDieScoreForCurrentPlayer();
+    const attackWeight = AI_ATTR_WEIGHTS.attack;
+
+    const scored = rollOptions.map(count => {
+        // More dice means more attribute income.
+        let score = count * avgDieScore;
+        // Shadow only triggers on an EMPTY area, so fewer dice make it more likely.
+        if (shadowAreas > 0) {
+            score += shadowAreas * SHADOW_PIERCING_DAMAGE * attackWeight * PIERCING_DAMAGE_MULTIPLIER
+                * Math.pow(1 - DIE_AREA_PROBABILITY, count);
+        }
+        // Brilliance needs 3+ dice in one area, so more dice make it more likely.
+        if (brillianceAreas > 0) {
+            score += brillianceAreas * BRILLIANCE_ATTACK_BONUS * attackWeight
+                * binomialProbAtLeast(BRILLIANCE_DICE_REQUIRED, count, DIE_AREA_PROBABILITY);
+        }
+        return {count, score};
+    });
+
+    const maxScore = Math.max(...scored.map(s => s.score));
+    return chooseUniform(scored.filter(s => s.score === maxScore)).count;
 }
 
 function getExpertActivationEffectId(label: string) {
