@@ -3906,15 +3906,21 @@ function renderMobilePlayerBlock(
         // 這裡採用「簡化版複製」：沿用原本每區是直向卡牌堆疊、三區橫向。
         const board = document.createElement('div');
         // 往下留一點空間給骰子浮層（避免蓋到卡牌）
-        // Natural height, pinned to the top of the block: the attack badges hang
-        // off the bottom of each slot, so stretching the slots would push them
-        // far down the screen. The block itself still fills the leftover height,
-        // so what sits below is the player's own background, not a dead gap.
-        board.className = 'mt-6 flex items-start justify-center gap-1';
+        // The slots keep their natural height (see slotSize) rather than being
+        // stretched, because the attack badges hang off the bottom of each slot
+        // and stretching pushes them down the screen. `items-stretch` here is
+        // only so the zones are bounded by the board height, which lets the
+        // slots SHRINK when the hand dock is open on a short screen instead of
+        // pushing the badges out of view. `pb-5` reserves the badge overhang.
+        board.className = position === 'bottom'
+            ? 'mt-6 flex-1 min-h-0 flex items-stretch justify-center gap-1 pb-5'
+            : 'mt-6 flex items-start justify-center gap-1';
 
         [0, 1, 2].forEach(aIdx => {
             const zone = document.createElement('div');
-            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
+            // No `h-full`: an explicit height would make the cross size non-auto
+            // and switch OFF the parent's `items-stretch`.
+            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${position === 'bottom' ? 'min-h-0' : ''} ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
 
             zone.innerHTML = `
                 <div class="w-full flex items-center justify-center pt-2 pb-0">
@@ -3926,7 +3932,11 @@ function renderMobilePlayerBlock(
             // Mobile only: lift the card stack a bit closer to basebar (allow slight overlap)
             // The current player's slots flex to the available height (with a floor
             // that still fits a stacked card); the opponent's stay compact.
-            slot.className = `minimal-slot -mt-2 w-[150px] h-[200px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            // h-[200px] is the height it wants; min-h-[110px] is how far it may
+            // shrink when the dock leaves less room (flex-shrink is on by default,
+            // and the stacked cards are absolutely positioned so nothing blocks it).
+            const slotSize = position === 'bottom' ? 'h-[200px] min-h-[110px]' : 'h-[200px]';
+            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const atkContainer = document.createElement('div');
@@ -4278,11 +4288,13 @@ function renderMobileLayout(typeColors) {
     scroller.className = 'flex-1 min-h-0 overflow-y-auto';
     scroller.addEventListener('scroll', hideGlobalTooltip);
 
-    // `min-h-full` + the current player's block being `flex-1` makes the board
-    // stretch to fill any leftover height instead of leaving a blank gap, while
-    // still allowing a scroll when the opponent board is expanded.
+    // `h-full` (not `min-h-full`): an exact height is what lets the current
+    // player's block actually SHRINK when the hand dock is open, instead of
+    // overflowing and pushing the attack badges out of view. It still fills the
+    // height when there is room, so no blank gap either. The opponent block is
+    // `shrink-0`, so expanding it still overflows and scrolls as intended.
     const inner = document.createElement('div');
-    inner.className = 'min-h-full flex flex-col';
+    inner.className = 'h-full flex flex-col';
 
     // 上方預設只顯示對手資訊；在需要點對手目標的模式下才顯示對手場地
     inner.appendChild(renderMobilePlayerBlock(oppIdx, typeColors, {position: 'top', showBoard: showOpponentBoard}));
