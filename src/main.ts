@@ -3906,18 +3906,15 @@ function renderMobilePlayerBlock(
         // 這裡採用「簡化版複製」：沿用原本每區是直向卡牌堆疊、三區橫向。
         const board = document.createElement('div');
         // 往下留一點空間給骰子浮層（避免蓋到卡牌）
-        // Stretch to the block's remaining height so the slots size themselves
-        // to the device instead of a fixed height that under/overflows.
-        board.className = position === 'bottom'
-            ? 'mt-4 flex-1 min-h-0 flex items-stretch justify-center gap-1'
-            : 'mt-6 flex items-start justify-center gap-1';
+        // Natural height, pinned to the top of the block: the attack badges hang
+        // off the bottom of each slot, so stretching the slots would push them
+        // far down the screen. The block itself still fills the leftover height,
+        // so what sits below is the player's own background, not a dead gap.
+        board.className = 'mt-6 flex items-start justify-center gap-1';
 
         [0, 1, 2].forEach(aIdx => {
             const zone = document.createElement('div');
-            // No `h-full` here on purpose: an explicit height makes the cross size
-            // non-auto, which switches OFF the parent's `items-stretch`. Letting it
-            // stay auto is what actually makes the zone fill the board height.
-            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${position === 'bottom' ? 'min-h-0' : ''} ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
+            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
 
             zone.innerHTML = `
                 <div class="w-full flex items-center justify-center pt-2 pb-0">
@@ -3929,10 +3926,7 @@ function renderMobilePlayerBlock(
             // Mobile only: lift the card stack a bit closer to basebar (allow slight overlap)
             // The current player's slots flex to the available height (with a floor
             // that still fits a stacked card); the opponent's stay compact.
-            // Fills the block's free height so there is no dead space above the
-            // hand dock, and gives the drop target the largest possible tap area.
-            const slotSize = position === 'bottom' ? 'flex-1 min-h-[120px]' : 'h-[200px]';
-            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            slot.className = `minimal-slot -mt-2 w-[150px] h-[200px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const atkContainer = document.createElement('div');
