@@ -641,7 +641,7 @@ function finishPreparationPhase() {
 
 function renderHomeScreen() {
     const wrap = document.createElement('div');
-    wrap.className = 'min-h-screen w-full bg-[#0b1220] text-white font-sans flex items-center justify-center p-6';
+    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans flex items-center justify-center p-6';
 
     wrap.innerHTML = `
         <div class="w-full max-w-3xl">
@@ -654,10 +654,6 @@ function renderHomeScreen() {
                     loading="eager"
                     decoding="async"
                 />
-            </div>
-
-            <div class="mt-6 text-center">
-                <div class="text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
             </div>
 
             <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -700,7 +696,7 @@ function renderHomeScreen() {
 
 function renderRulesScreen() {
     const wrap = document.createElement('div');
-    wrap.className = 'min-h-screen w-full bg-[#0b1220] text-white font-sans p-6';
+    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans p-6';
 
     wrap.innerHTML = `
         <div class="mx-auto w-full max-w-3xl">
@@ -3269,7 +3265,7 @@ function renderGoldDots(cost: number) {
 function renderMarketPanel(typeColors) {
     const p = getCurrentPlayer();
     const panel = document.createElement('div');
-    panel.className = 'w-[210px] border-l border-slate-200 bg-white/80 backdrop-blur-sm h-screen shrink-0 flex flex-col';
+    panel.className = 'w-[210px] border-l border-slate-200 bg-white/80 backdrop-blur-sm h-[100dvh] shrink-0 flex flex-col';
 
     const header = document.createElement('div');
     header.className = 'h-16 px-4 border-b border-slate-200 flex items-center justify-between shrink-0';
@@ -3800,7 +3796,10 @@ function renderMobilePlayerBlock(
     // Player background: 先手(玩家0)=淡紅、後手(玩家1)=淡藍
     // (不要依 top/bottom 決定，因為 mobile 版 top 可能是對手)
     void position;
-    wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-rose-100/100' : 'bg-blue-100/100'} shrink-0`;
+    // The current player's block grows to fill the leftover height so the board
+    // never leaves a dead gap above the hand dock; the opponent strip stays compact.
+    const growth = position === 'bottom' ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0';
+    wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-rose-100/100' : 'bg-blue-100/100'} ${growth}`;
 
     // compact header
     const header = document.createElement('div');
@@ -3907,11 +3906,18 @@ function renderMobilePlayerBlock(
         // 這裡採用「簡化版複製」：沿用原本每區是直向卡牌堆疊、三區橫向。
         const board = document.createElement('div');
         // 往下留一點空間給骰子浮層（避免蓋到卡牌）
-        board.className = 'mt-6 flex items-start justify-center gap-1';
+        // Stretch to the block's remaining height so the slots size themselves
+        // to the device instead of a fixed height that under/overflows.
+        board.className = position === 'bottom'
+            ? 'mt-4 flex-1 min-h-0 flex items-stretch justify-center gap-1'
+            : 'mt-6 flex items-start justify-center gap-1';
 
         [0, 1, 2].forEach(aIdx => {
             const zone = document.createElement('div');
-            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
+            // No `h-full` here on purpose: an explicit height makes the cross size
+            // non-auto, which switches OFF the parent's `items-stretch`. Letting it
+            // stay auto is what actually makes the zone fill the board height.
+            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${position === 'bottom' ? 'min-h-0' : ''} ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
 
             zone.innerHTML = `
                 <div class="w-full flex items-center justify-center pt-2 pb-0">
@@ -3921,7 +3927,12 @@ function renderMobilePlayerBlock(
 
             const slot = document.createElement('div');
             // Mobile only: lift the card stack a bit closer to basebar (allow slight overlap)
-            slot.className = `minimal-slot -mt-2 w-[150px] h-[200px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            // The current player's slots flex to the available height (with a floor
+            // that still fits a stacked card); the opponent's stay compact.
+            // Fills the block's free height so there is no dead space above the
+            // hand dock, and gives the drop target the largest possible tap area.
+            const slotSize = position === 'bottom' ? 'flex-1 min-h-[120px]' : 'h-[200px]';
+            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const atkContainer = document.createElement('div');
@@ -4157,7 +4168,9 @@ function renderMobilePlayerBlock(
 function renderMobileHandDrawer(typeColors) {
     const p = getCurrentPlayer();
     const drawer = document.createElement('div');
-    drawer.className = 'fixed left-0 right-0 bottom-0 z-[1200]';
+    // A flex sibling of the scroller rather than a fixed overlay: it no longer
+    // covers the board, so the layout needs no compensating bottom padding.
+    drawer.className = 'w-full shrink-0 relative z-[1200]';
 
     // Header：只保留「切換」作為標題（同一行）
     const header = document.createElement('div');
@@ -4251,7 +4264,9 @@ function renderMobileHandDrawer(typeColors) {
 
 function renderMobileLayout(typeColors) {
     const container = document.createElement('div');
-    container.className = 'h-screen w-full bg-[#f8fafc] text-[#0f172a] font-sans overflow-hidden flex flex-col';
+    // 100dvh (not 100vh): mobile browser toolbars shrink the visible viewport,
+    // and 100vh would overflow it and cause a whole-page scroll.
+    container.className = 'h-[100dvh] w-full bg-[#f8fafc] text-[#0f172a] font-sans overflow-hidden flex flex-col';
 
     container.appendChild(renderMobileTopBar(typeColors));
 
@@ -4264,18 +4279,26 @@ function renderMobileLayout(typeColors) {
     const showOpponentBoard = needsOpponentTargets || mobileOpponentBoardOpen;
 
     const scroller = document.createElement('div');
-    // 留出底部抽屜 handle 高度（約 40px） + 展開時卡列高度，由抽屜本身覆蓋即可
-    scroller.className = 'flex-1 overflow-y-auto pb-14';
+    // The hand dock below is a real flex sibling (not a fixed overlay), so no
+    // bottom padding is needed to clear it.
+    scroller.className = 'flex-1 min-h-0 overflow-y-auto';
     scroller.addEventListener('scroll', hideGlobalTooltip);
 
+    // `min-h-full` + the current player's block being `flex-1` makes the board
+    // stretch to fill any leftover height instead of leaving a blank gap, while
+    // still allowing a scroll when the opponent board is expanded.
+    const inner = document.createElement('div');
+    inner.className = 'min-h-full flex flex-col';
+
     // 上方預設只顯示對手資訊；在需要點對手目標的模式下才顯示對手場地
-    scroller.appendChild(renderMobilePlayerBlock(oppIdx, typeColors, {position: 'top', showBoard: showOpponentBoard}));
+    inner.appendChild(renderMobilePlayerBlock(oppIdx, typeColors, {position: 'top', showBoard: showOpponentBoard}));
 
     // 購買階段市場改到下方 dock（與手牌同位置）
 
     // 下方顯示當回合玩家（顯示場地）
-    scroller.appendChild(renderMobilePlayerBlock(curIdx, typeColors, {position: 'bottom', showBoard: true}));
+    inner.appendChild(renderMobilePlayerBlock(curIdx, typeColors, {position: 'bottom', showBoard: true}));
 
+    scroller.appendChild(inner);
     container.appendChild(scroller);
     container.appendChild(renderMobileHandDrawer(typeColors));
     return container;
@@ -4357,7 +4380,7 @@ function render() {
     }
 
     const container = document.createElement('div');
-    container.className = 'h-screen w-full bg-[#f8fafc] text-[#0f172a] font-sans overflow-hidden flex';
+    container.className = 'h-[100dvh] w-full bg-[#f8fafc] text-[#0f172a] font-sans overflow-hidden flex';
 
     // Left: main game
     const left = document.createElement('div');
