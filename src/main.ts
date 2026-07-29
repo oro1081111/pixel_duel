@@ -73,6 +73,12 @@ function getCardPngUrlByImgNo(imgNo: number) {
     return `cards/${getCardPngFileName(imgNo)}`;
 }
 
+// Relative path for the same reason as getCardPngUrlByImgNo (Vite `base`).
+const COVER_IMG_URL = 'cover/pixel_duel_cover.jpg';
+
+// Physical board game rulebook (PDF hosted on Google Drive).
+const PHYSICAL_RULEBOOK_URL = 'https://drive.google.com/file/d/1ep-OoATJueR2ji2Bd_OXz4bokXQs7l-7/view?usp=drivesdk';
+
 function getImgNoForEffectId(effectId: string) {
     const def = CARD_DEFS.find(d => d.effectId === effectId);
     return def?.imgNo ?? 0;
@@ -645,10 +651,19 @@ function renderHomeScreen() {
 
     wrap.innerHTML = `
         <div class="w-full max-w-3xl">
-            <div class="text-center">
-                <div class="text-[12px] font-black tracking-[0.45em] text-indigo-200 uppercase">PIXEL DUEL</div>
-                <div class="mt-2 text-4xl sm:text-5xl font-black tracking-tight">像素對決</div>
-                <div class="mt-3 text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
+            <div class="flex justify-center">
+                <img
+                    src="${COVER_IMG_URL}"
+                    alt="像素對決 PIXEL DUEL 封面"
+                    class="w-full max-w-[300px] sm:max-w-[360px] rounded-2xl border border-white/15 shadow-xl shadow-black/40 select-none"
+                    draggable="false"
+                    loading="eager"
+                    decoding="async"
+                />
+            </div>
+
+            <div class="mt-6 text-center">
+                <div class="text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
             </div>
 
             <div class="mt-6 flex justify-center">
@@ -712,7 +727,22 @@ function renderRulesScreen() {
                 <button id="backHome" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">返回首頁</button>
             </div>
 
-            <div class="mt-6 space-y-4 text-slate-200/90">
+            <a
+                id="physicalRulebookBtn"
+                href="${PHYSICAL_RULEBOOK_URL}"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="mt-6 flex items-center justify-between gap-3 rounded-2xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 px-5 py-4 shadow-lg shadow-black/20 transition-all active:scale-[0.99]"
+            >
+                <div>
+                    <div class="text-[9px] font-black tracking-[0.3em] text-amber-200 uppercase">PDF</div>
+                    <div class="mt-1 text-lg font-black text-white">實體桌遊說明書</div>
+                    <div class="mt-1 text-[11px] font-bold text-amber-100/90">開啟完整規則書（另開新分頁）</div>
+                </div>
+                <div class="text-2xl text-amber-200 shrink-0" aria-hidden="true">↗</div>
+            </a>
+
+            <div class="mt-4 space-y-4 text-slate-200/90">
                 <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
                     <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">勝利條件</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
