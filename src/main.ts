@@ -641,7 +641,7 @@ function finishPreparationPhase() {
 
 function renderHomeScreen() {
     const wrap = document.createElement('div');
-    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans flex items-center justify-center p-6';
+    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans flex items-center justify-center p-4 sm:p-6';
 
     wrap.innerHTML = `
         <div class="w-full max-w-3xl">
@@ -649,14 +649,14 @@ function renderHomeScreen() {
                 <img
                     src="${COVER_IMG_URL}"
                     alt="像素對決 PIXEL DUEL 封面"
-                    class="w-full max-w-[300px] sm:max-w-[360px] rounded-2xl border border-white/15 shadow-xl shadow-black/40 select-none"
+                    class="w-auto max-w-[300px] max-h-[32dvh] sm:max-w-[360px] sm:max-h-none rounded-2xl border border-white/15 shadow-xl shadow-black/40 select-none"
                     draggable="false"
                     loading="eager"
                     decoding="async"
                 />
             </div>
 
-            <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="mt-6 sm:mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <button id="modePvp" class="rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] transition-all px-4 py-4 text-left shadow-lg shadow-indigo-900/30 border border-indigo-400/30">
                     <div class="text-[9px] font-black tracking-[0.3em] text-indigo-200 uppercase">Mode</div>
                     <div class="mt-1 text-lg font-black">PvP</div>
@@ -677,12 +677,17 @@ function renderHomeScreen() {
             </div>
 
             <!-- Make Rules button match the mode buttons' width (full width on mobile, 1-column width on desktop) -->
-            <div class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="mt-4 sm:mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <button id="rulesBtn" class="sm:col-start-2 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 px-4 py-4 text-left shadow-lg shadow-black/20 transition-all active:scale-[0.99]">
                     <div class="text-[9px] font-black tracking-[0.3em] text-slate-300 uppercase">Info</div>
                     <div class="mt-1 text-lg font-black">規則</div>
                     <div class="mt-1 text-[11px] font-bold text-slate-200/90">玩法教學 / 回合流程</div>
                 </button>
+            </div>
+
+            <div class="mt-6 sm:mt-8 text-center leading-relaxed">
+                <div class="text-[11px] font-bold text-slate-400">奧羅桌遊設計工作室-練習作品</div>
+                <div class="mt-0.5 text-[11px] font-bold text-slate-500">僅供推廣使用請勿做任何商業行為</div>
             </div>
         </div>
     `;
