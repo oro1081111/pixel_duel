@@ -396,10 +396,8 @@ let showEffectList = false;
 
 type AppScreen = 'home' | 'rules' | 'game';
 type GameMode = 'pvp' | 'cvp' | 'pvc';
-type ComputerAiDifficulty = 'normal' | 'expert';
 let appScreen: AppScreen = 'home';
 let selectedMode: GameMode | null = null;
-let computerAiDifficulty: ComputerAiDifficulty = 'normal';
 
 // Match config
 let matchPlayerNames: [string, string] = ['玩家 A', '玩家 B'];
@@ -558,19 +556,15 @@ function isComputerTurnNow() {
     return appScreen === 'game' && c !== null && currentPlayerIndex === c;
 }
 
-function getComputerDisplayName() {
-    return computerAiDifficulty === 'expert' ? '專家電腦' : '電腦';
-}
-
 function setMatchPlayerNamesForMode(mode: GameMode) {
     if (mode === 'cvp') {
         // Computer first => computer is player 0
-        matchPlayerNames = [getComputerDisplayName(), '玩家'];
+        matchPlayerNames = ['電腦', '玩家'];
         return;
     }
     if (mode === 'pvc') {
         // Player first => computer is player 1
-        matchPlayerNames = ['玩家', getComputerDisplayName()];
+        matchPlayerNames = ['玩家', '電腦'];
         return;
     }
     matchPlayerNames = ['玩家 A', '玩家 B'];
@@ -666,13 +660,6 @@ function renderHomeScreen() {
                 <div class="text-sm text-slate-200/90 font-bold">選擇模式開始遊戲</div>
             </div>
 
-            <div class="mt-6 flex justify-center">
-                <div class="inline-flex rounded-2xl bg-white/10 border border-white/15 p-1 shadow-lg shadow-black/20">
-                    <button id="aiNormalBtn" class="px-5 py-2 rounded-xl text-[12px] font-black tracking-widest transition-all ${computerAiDifficulty === 'normal' ? 'bg-indigo-500 text-white shadow-md shadow-indigo-950/30' : 'text-slate-200 hover:bg-white/10'}">普通</button>
-                    <button id="aiExpertBtn" class="px-5 py-2 rounded-xl text-[12px] font-black tracking-widest transition-all ${computerAiDifficulty === 'expert' ? 'bg-indigo-500 text-white shadow-md shadow-indigo-950/30' : 'text-slate-200 hover:bg-white/10'}">專家</button>
-                </div>
-            </div>
-
             <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <button id="modePvp" class="rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] transition-all px-4 py-4 text-left shadow-lg shadow-indigo-900/30 border border-indigo-400/30">
                     <div class="text-[9px] font-black tracking-[0.3em] text-indigo-200 uppercase">Mode</div>
@@ -707,8 +694,6 @@ function renderHomeScreen() {
     (wrap.querySelector('#modePvp') as HTMLButtonElement).onclick = () => startPvpGame();
     (wrap.querySelector('#modeCvp') as HTMLButtonElement).onclick = () => startCvpGame();
     (wrap.querySelector('#modePvc') as HTMLButtonElement).onclick = () => startPvcGame();
-    (wrap.querySelector('#aiNormalBtn') as HTMLButtonElement).onclick = () => { computerAiDifficulty = 'normal'; render(); };
-    (wrap.querySelector('#aiExpertBtn') as HTMLButtonElement).onclick = () => { computerAiDifficulty = 'expert'; render(); };
     (wrap.querySelector('#rulesBtn') as HTMLButtonElement).onclick = () => showRules();
     return wrap;
 }
@@ -1034,16 +1019,6 @@ function listSelfAttackHitTargets() {
 function chooseHighestAttackTarget<T extends {val: number}>(targets: T[]): T {
     const maxVal = Math.max(...targets.map(t => t.val));
     return chooseUniform(targets.filter(t => t.val === maxVal));
-}
-
-function chooseAiWeightedAttackTarget<T extends {val: number}>(targets: T[]): T {
-    return Math.random() < 0.9
-        ? chooseHighestAttackTarget(targets)
-        : chooseUniform(targets);
-}
-
-function chooseAiSelfAttackTarget(targets: Array<{areaIdx: number; hitIdx: number; val: number}>) {
-    return chooseAiWeightedAttackTarget(targets);
 }
 
 const AI_EFFECT_WEIGHTS: Record<string, number> = {
@@ -1838,133 +1813,9 @@ function getAvailableActivationsForCurrentPlayer() {
 }
 
 async function aiResolveSelectionModesStep() {
-    if (computerAiDifficulty === 'expert') return aiResolveExpertSelectionModesStep();
-
-    // Resolve any active selection mode with uniform random target.
-    // Returns true if it performed an action.
-
-    // Lucky: choose a die to remove
-    if (luckySelectionMode && diceResults.length > 0) {
-        const idx = randInt(0, diceResults.length - 1);
-        logAi(`${getAiName()} 觸發幸運：隨機移除骰子 #${idx + 1}(${diceResults[idx]})`);
-        await sleep(randInt(350, 650));
-        removeLuckyDie(idx);
-        return true;
-    }
-
-    // Fate: choose k dice to reroll, then confirm
-    if (fateSelectionMode && diceResults.length > 0) {
-        const n = diceResults.length;
-        const k = randInt(1, n);
-        const indices = Array.from({length: n}, (_, i) => i);
-        // Fisher-Yates shuffle for uniform subset sampling (approx by k)
-        for (let i = indices.length - 1; i > 0; i--) {
-            const j = randInt(0, i);
-            [indices[i], indices[j]] = [indices[j], indices[i]];
-        }
-        const chosen = indices.slice(0, k);
-        logAi(`${getAiName()} 使用命運：隨機選 ${k}/${n} 顆骰子重擲（#${chosen.map(i => i + 1).join(',')}）`);
-        await sleep(randInt(350, 650));
-        chosen.forEach(i => toggleDiceIndexSelection(i));
-        await sleep(randInt(250, 450));
-        confirmFate();
-        return true;
-    }
-
-    // Evasion: usually pick one of the opponent's highest attack hits
-    if (evasionSelectionMode) {
-        const targets = listOpponentDodgeTargets();
-        if (targets.length > 0) {
-            const t = chooseAiWeightedAttackTarget(targets);
-            logAi(`${getAiName()} 使用閃避：無視對手區域${t.areaIdx + 1} 的攻擊(${t.val})`);
-            await sleep(randInt(350, 650));
-            targetEvasion(t.areaIdx, t.hitIdx);
-            return true;
-        }
-        // no valid target, cancel mode defensively
-        evasionSelectionMode = false;
-        return false;
-    }
-
-    // Illusion: pick one opponent active effect card (some effects are not copyable)
-    if (illusionSelectionMode) {
-        const opp = getOpponent();
-        const candidates: number[] = [];
-        opp.activeAreaEffects.forEach((c, aIdx) => {
-            if (!c) return;
-            if (ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId)) return;
-            candidates.push(aIdx);
-        });
-        if (candidates.length > 0) {
-            const aIdx = chooseUniform(candidates);
-            const name = opp.activeAreaEffects[aIdx]?.effectName || '未知';
-            logAi(`${getAiName()} 幻象幽影：複製對手區域${aIdx + 1}「${name}」`);
-            await sleep(randInt(350, 650));
-            targetIllusion(aIdx);
-            return true;
-        }
-        illusionSelectionMode = false;
-        return false;
-    }
-
-    // Frost: discard one die
-    if (frostSelectionMode && diceResults.length > 0) {
-        const idx = randInt(0, diceResults.length - 1);
-        logAi(`${getAiName()} 使用冰霜：捨棄骰子 #${idx + 1}(${diceResults[idx]})`);
-        await sleep(randInt(350, 650));
-        targetFrost(idx);
-        return true;
-    }
-
-    // Charge: usually pick one of self highest attacks
-    if (chargeSelectionMode) {
-        const targets = listSelfAttackHitTargets();
-        if (targets.length > 0) {
-            const t = chooseAiSelfAttackTarget(targets);
-            logAi(`${getAiName()} 充能：強化區域${t.areaIdx + 1} 攻擊(${t.val})`);
-            await sleep(randInt(350, 650));
-            useCharge(t.areaIdx, t.hitIdx);
-            return true;
-        }
-        chargeSelectionMode = false;
-        return false;
-    }
-
-    // Reproduction: usually pick one of self highest attacks
-    if (reproductionSelectionMode) {
-        const targets = listSelfAttackHitTargets();
-        if (targets.length > 0) {
-            const t = chooseAiSelfAttackTarget(targets);
-            logAi(`${getAiName()} 再現：複製區域${t.areaIdx + 1} 攻擊(${t.val})`);
-            await sleep(randInt(350, 650));
-            targetReproduction(t.areaIdx, t.hitIdx);
-            return true;
-        }
-        reproductionSelectionMode = false;
-        return false;
-    }
-
-    // Flare: usually pick one of self highest attacks
-    if (flareSelectionMode) {
-        const targets = listSelfAttackHitTargets();
-        if (targets.length > 0) {
-            const t = chooseAiSelfAttackTarget(targets);
-            logAi(`${getAiName()} 閃光：翻倍區域${t.areaIdx + 1} 攻擊(${t.val})`);
-            await sleep(randInt(350, 650));
-            targetFlare(t.areaIdx, t.hitIdx);
-            return true;
-        }
-        flareSelectionMode = false;
-        return false;
-    }
-
-    return false;
-}
-
-async function aiResolveExpertSelectionModesStep() {
     if (luckySelectionMode && diceResults.length > 0) {
         const idx = chooseLowestValueDieIndex();
-        logAi(`${getAiName()} 專家判斷：移除低價值骰子 #${idx + 1}(${diceResults[idx]})`);
+        logAi(`${getAiName()} 移除低價值骰子 #${idx + 1}(${diceResults[idx]})`);
         await sleep(randInt(280, 500));
         removeLuckyDie(idx);
         return true;
@@ -1972,7 +1823,7 @@ async function aiResolveExpertSelectionModesStep() {
 
     if (fateSelectionMode && diceResults.length > 0) {
         const chosen = chooseExpertFateDiceIndices();
-        logAi(`${getAiName()} 專家判斷：重擲 ${chosen.length} 顆低價值骰（#${chosen.map(i => i + 1).join(',')}）`);
+        logAi(`${getAiName()} 重擲 ${chosen.length} 顆低價值骰（#${chosen.map(i => i + 1).join(',')}）`);
         await sleep(randInt(280, 500));
         chosen.forEach(i => toggleDiceIndexSelection(i));
         await sleep(randInt(180, 320));
@@ -1984,7 +1835,7 @@ async function aiResolveExpertSelectionModesStep() {
         const targets = listOpponentDodgeTargets();
         if (targets.length > 0) {
             const t = chooseHighestAttackTarget(targets);
-            logAi(`${getAiName()} 專家閃避：優先無視最高攻擊 ${t.val}`);
+            logAi(`${getAiName()} 閃避：優先無視最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             targetEvasion(t.areaIdx, t.hitIdx);
             return true;
@@ -1997,7 +1848,7 @@ async function aiResolveExpertSelectionModesStep() {
         const aIdx = chooseExpertIllusionTargetArea();
         if (aIdx >= 0) {
             const name = getOpponent().activeAreaEffects[aIdx]?.effectName || '未知';
-            logAi(`${getAiName()} 專家幻象：複製高價值效果「${name}」`);
+            logAi(`${getAiName()} 幻象：複製高價值效果「${name}」`);
             await sleep(randInt(280, 500));
             targetIllusion(aIdx);
             return true;
@@ -2008,7 +1859,7 @@ async function aiResolveExpertSelectionModesStep() {
 
     if (frostSelectionMode && diceResults.length > 0) {
         const idx = chooseExpertFrostDieIndex();
-        logAi(`${getAiName()} 專家冰霜：捨棄最適合的骰子 #${idx + 1}(${diceResults[idx]})`);
+        logAi(`${getAiName()} 冰霜：捨棄最適合的骰子 #${idx + 1}(${diceResults[idx]})`);
         await sleep(randInt(280, 500));
         targetFrost(idx);
         return true;
@@ -2018,7 +1869,7 @@ async function aiResolveExpertSelectionModesStep() {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
             const t = chooseExpertSelfAttackTarget(targets);
-            logAi(`${getAiName()} 專家充能：強化最高攻擊 ${t.val}`);
+            logAi(`${getAiName()} 充能：強化最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             useCharge(t.areaIdx, t.hitIdx);
             return true;
@@ -2031,7 +1882,7 @@ async function aiResolveExpertSelectionModesStep() {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
             const t = chooseExpertSelfAttackTarget(targets);
-            logAi(`${getAiName()} 專家再現：複製最高攻擊 ${t.val}`);
+            logAi(`${getAiName()} 再現：複製最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             targetReproduction(t.areaIdx, t.hitIdx);
             return true;
@@ -2044,7 +1895,7 @@ async function aiResolveExpertSelectionModesStep() {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
             const t = chooseExpertSelfAttackTarget(targets);
-            logAi(`${getAiName()} 專家閃光：翻倍最高攻擊 ${t.val}`);
+            logAi(`${getAiName()} 閃光：翻倍最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             targetFlare(t.areaIdx, t.hitIdx);
             return true;
@@ -2057,24 +1908,6 @@ async function aiResolveExpertSelectionModesStep() {
 }
 
 async function aiActivationLoopStep() {
-    if (computerAiDifficulty === 'expert') return aiExpertActivationLoopStep();
-
-    // If there are any available activations, 90% chance to activate ONE.
-    const acts = getAvailableActivationsForCurrentPlayer();
-    if (acts.length === 0) return false;
-    if (Math.random() > 0.9) {
-        logAi(`${getAiName()} 放棄發動效果（10%）`);
-        await sleep(randInt(250, 450));
-        return false;
-    }
-    const act = chooseUniform(acts);
-    logAi(`${getAiName()} 發動效果：${act.label}`);
-    await sleep(randInt(350, 700));
-    act.run();
-    return true;
-}
-
-async function aiExpertActivationLoopStep() {
     const acts = getAvailableActivationsForCurrentPlayer();
     if (acts.length === 0) return false;
 
@@ -2090,66 +1923,18 @@ async function aiExpertActivationLoopStep() {
 
     const maxScore = Math.max(...scored.map(x => x.score));
     const chosen = chooseUniform(scored.filter(x => x.score === maxScore)).act;
-    logAi(`${getAiName()} 專家發動：${chosen.label}`);
+    logAi(`${getAiName()} 發動效果：${chosen.label}`);
     await sleep(randInt(280, 520));
     chosen.run();
     return true;
 }
 
 async function aiDoPlayPhase() {
-    if (computerAiDifficulty === 'expert') return aiExpertDoPlayPhase();
-
-    const p = getCurrentPlayer();
-    if (currentPhaseIndex !== 0) return;
-
-    // Preparation: only player 1 can play exactly one card.
-    const maxPlays = inPreparationPhase ? 1 : Math.min(3, p.hand.length);
-
-    // Must play at least 1 if has hand
-    if (p.hand.length === 0) {
-        logAi(`${getAiName()} 無手牌，結束出牌`);
-        await sleep(randInt(250, 450));
-        nextPhase();
-        return;
-    }
-
-    const minPlays = 1;
-    const playCount = randInt(minPlays, maxPlays);
-    logAi(`${getAiName()} 出牌：隨機打出 ${playCount} 張`);
-    await sleep(randInt(350, 650));
-
-    for (let i = 0; i < playCount; i++) {
-        if (p.hand.length === 0) break;
-        // choose random hand index
-        const hIdx = randInt(0, p.hand.length - 1);
-        const cardName = p.hand[hIdx]?.effectName || '未知';
-        const areaIdx = randInt(0, 2);
-        selectedHandCardIndex = hIdx;
-        logAi(`${getAiName()} 打出「${cardName}」→ 區域${areaIdx + 1}`);
-        await sleep(randInt(350, 650));
-        playToBoard(areaIdx);
-        await sleep(randInt(200, 450));
-        if (inPreparationPhase) break;
-    }
-
-    // In preparation: after one play, press start
-    if (inPreparationPhase && players[1].cardsPlayedThisTurn >= 1) {
-        logAi(`${getAiName()} 準備完成：開始遊戲`);
-        await sleep(randInt(350, 650));
-        finishPreparationPhase();
-        return;
-    }
-
-    await sleep(randInt(250, 450));
-    nextPhase();
-}
-
-async function aiExpertDoPlayPhase() {
     const p = getCurrentPlayer();
     if (currentPhaseIndex !== 0) return;
 
     if (p.hand.length === 0) {
-        logAi(`${getAiName()} 專家判斷：無手牌，進入擲骰`);
+        logAi(`${getAiName()} 無手牌，進入擲骰`);
         await sleep(randInt(160, 300));
         nextPhase();
         return;
@@ -2157,7 +1942,7 @@ async function aiExpertDoPlayPhase() {
 
     const maxPlays = inPreparationPhase ? 1 : Math.min(3, p.hand.length);
     const playCount = Math.min(maxPlays, Math.max(1, chooseExpertPlayCount()));
-    logAi(`${getAiName()} 專家出牌：規劃打出 ${playCount} 張`);
+    logAi(`${getAiName()} 出牌：規劃打出 ${playCount} 張`);
     await sleep(randInt(250, 450));
 
     for (let i = 0; i < playCount; i++) {
@@ -2165,7 +1950,7 @@ async function aiExpertDoPlayPhase() {
         if (!choice) break;
         const cardName = p.hand[choice.handIdx]?.effectName || '未知';
         selectedHandCardIndex = choice.handIdx;
-        logAi(`${getAiName()} 專家出牌：「${cardName}」→ 區域${choice.areaIdx + 1}`);
+        logAi(`${getAiName()} 出牌：「${cardName}」→ 區域${choice.areaIdx + 1}`);
         await sleep(randInt(260, 480));
         playToBoard(choice.areaIdx);
         await sleep(randInt(160, 300));
@@ -2173,7 +1958,7 @@ async function aiExpertDoPlayPhase() {
     }
 
     if (inPreparationPhase && players[1].cardsPlayedThisTurn >= 1) {
-        logAi(`${getAiName()} 專家準備完成：開始遊戲`);
+        logAi(`${getAiName()} 準備完成：開始遊戲`);
         await sleep(randInt(240, 420));
         finishPreparationPhase();
         return;
@@ -2184,28 +1969,6 @@ async function aiExpertDoPlayPhase() {
 }
 
 async function aiDoRollPhase() {
-    if (computerAiDifficulty === 'expert') return aiExpertDoRollPhase();
-
-    if (currentPhaseIndex !== 1) return;
-    if (diceResults.length > 0) {
-        // Already rolled; go to judging
-        await sleep(randInt(250, 450));
-        nextPhase();
-        return;
-    }
-
-    const p = getCurrentPlayer();
-    const shouldRollFiveBecauseNoHand = p.hand.length === 0 && p.cardsPlayedThisTurn === 0;
-    const rollOptions = shouldRollFiveBecauseNoHand
-        ? [5]
-        : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
-    const count = chooseUniform(rollOptions);
-    logAi(`${getAiName()} 擲骰：${count} 顆`);
-    await sleep(randInt(350, 650));
-    rollDice(count);
-}
-
-async function aiExpertDoRollPhase() {
     if (currentPhaseIndex !== 1) return;
     if (diceResults.length > 0) {
         await sleep(randInt(160, 280));
@@ -2219,60 +1982,17 @@ async function aiExpertDoRollPhase() {
         ? [5]
         : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
     const count = chooseExpertRollCount(rollOptions);
-    logAi(`${getAiName()} 專家擲骰：選擇 ${count} 顆`);
+    logAi(`${getAiName()} 擲骰：選擇 ${count} 顆`);
     await sleep(randInt(240, 420));
     rollDice(count);
 }
 
 async function aiDoBuyPhase() {
-    if (computerAiDifficulty === 'expert') return aiExpertDoBuyPhase();
-
     if (currentPhaseIndex !== 6) return;
     const p = getCurrentPlayer();
 
-    // Must draw first free card if deck not empty
     if (deck.length > 0 && buyDeckDrawCount < 1) {
         logAi(`${getAiName()} 購買：先抽免費牌`);
-        await sleep(randInt(350, 650));
-        buyFromDeck();
-        return;
-    }
-
-    // Build action list: paid deck draw (if can) and market slots (if can).
-    const actions: Array<{label: string; run: () => void}> = [];
-    const nextDrawIndex = buyDeckDrawCount + 1;
-    const nextDrawCost = getDeckDrawCost(nextDrawIndex);
-    const canDraw = deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost;
-    if (canDraw) actions.push({label: `抽牌庫(-${nextDrawCost}金)`, run: () => buyFromDeck()});
-
-    // market slots indices 0..2
-    ([0, 1, 2] as const).forEach((idx) => {
-        const c = market[idx];
-        if (!c) return;
-        const price = getMarketPrice(idx);
-        if (p.gold < price) return;
-        actions.push({label: `買市場(價格${price})「${c.effectName}」`, run: () => buyMarketCard(idx)});
-    });
-
-    if (actions.length === 0) {
-        logAi(`${getAiName()} 購買階段：沒有足夠金錢繼續購買，結束購買`);
-        await sleep(randInt(350, 700));
-        nextPhase();
-        return;
-    }
-
-    const chosen = chooseUniform(actions);
-    logAi(`${getAiName()} 購買決策：${chosen.label}`);
-    await sleep(randInt(350, 700));
-    chosen.run();
-}
-
-async function aiExpertDoBuyPhase() {
-    if (currentPhaseIndex !== 6) return;
-    const p = getCurrentPlayer();
-
-    if (deck.length > 0 && buyDeckDrawCount < 1) {
-        logAi(`${getAiName()} 專家購買：先抽免費牌`);
         await sleep(randInt(240, 420));
         buyFromDeck();
         return;
@@ -2302,7 +2022,7 @@ async function aiExpertDoBuyPhase() {
     });
 
     if (actions.length === 0) {
-        logAi(`${getAiName()} 專家購買：沒有可買選項，結束購買`);
+        logAi(`${getAiName()} 購買：沒有可買選項，結束購買`);
         await sleep(randInt(240, 420));
         nextPhase();
         return;
@@ -2310,7 +2030,7 @@ async function aiExpertDoBuyPhase() {
 
     const maxScore = Math.max(...actions.map(a => a.score));
     const chosen = chooseUniform(actions.filter(a => a.score === maxScore));
-    logAi(`${getAiName()} 專家購買：${chosen.label}`);
+    logAi(`${getAiName()} 購買：${chosen.label}`);
     await sleep(randInt(280, 500));
     chosen.run();
 }
