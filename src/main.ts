@@ -3879,65 +3879,62 @@ function getMobileCardFrameStyleVars(size: 'board' | 'hand' | 'market') {
 }
 
 function renderMobileTopBar(typeColors) {
+    void typeColors;
+    // 頂列：左＝返回首頁、中＝標題、右＝卡牌介紹。
+    // 階段與提示都由底部操作列負責，這裡不重複顯示。
     const wrap = document.createElement('div');
-    wrap.className = 'h-12 px-3 border-b border-slate-200 bg-white/90 backdrop-blur flex items-center justify-between shrink-0';
+    wrap.className = 'h-12 px-3 border-b border-slate-200 bg-white/90 backdrop-blur flex items-center justify-between shrink-0 relative';
 
-    // Left: info button (effects list)
     const left = document.createElement('div');
-    left.className = 'flex items-center gap-2';
-    left.innerHTML = `
-        <button id="infoBtn" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 active:scale-95 shadow-sm border border-slate-200">
+    left.className = 'flex items-center';
+    left.appendChild(renderGoHomeButton());
+
+    const center = document.createElement('div');
+    center.className = 'absolute left-1/2 -translate-x-1/2 pointer-events-none';
+    center.innerHTML = `<div class="text-[15px] font-black text-slate-800 tracking-[0.12em]">像素對決</div>`;
+
+    const right = document.createElement('div');
+    right.className = 'flex items-center';
+    right.innerHTML = `
+        <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 active:scale-95 shadow-sm border border-slate-200">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
         </button>
-        <div class="text-[10px] font-black text-slate-700 tracking-wider">${inPreparationPhase ? '準備' : PHASE_NAMES[currentPhaseIndex]}</div>
     `;
-    (left.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
-    left.insertBefore(renderGoHomeButton(), left.firstChild);
+    (right.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
 
-    // Center: phase hint (mobile 版縮小字體，避免擠壓左右按鈕)
-    const center = document.createElement('div');
-    center.className = 'absolute left-1/2 -translate-x-1/2 max-w-[58%] text-center';
-
-    let displayPhaseHint = phaseHint;
-    if (luckySelectionMode) {
-        displayPhaseHint = '幸運：移除1骰';
-    }
-    if (illusionSelectionMode) {
-        displayPhaseHint = '幻象：選對手卡';
-    }
-
-    // 讓 mobile 的提示字比桌機更小、且單行截斷
-    center.innerHTML = `
-        <div class="text-[9px] font-black text-slate-500 tracking-wider whitespace-nowrap overflow-hidden text-ellipsis">
-            ${displayPhaseHint || ''}
-        </div>
-    `;
-
-    // 動作按鈕與提示文字改由底部操作列（renderMobileActionBar）顯示，
-    // 那裡才在拇指可及範圍內；頂列只留返回/資訊/階段名稱。
-    wrap.classList.add('relative');
     wrap.appendChild(left);
+    wrap.appendChild(center);
+    wrap.appendChild(right);
     return wrap;
 }
 
 // 手機主要操作列：貼在手牌區正上方（拇指區），而不是畫面最頂端。
 // 用的是場地下方原本閒置的空間，所以場地不會被壓縮。
 function renderMobileActionBar() {
+    // 單行三欄：左＝階段 1~7、中＝提示、右＝按鈕。不換行，所以可以壓得很扁。
     const bar = document.createElement('div');
-    bar.className = 'shrink-0 flex items-center gap-3 px-3 py-2 bg-white border-t border-slate-200 shadow-[0_-2px_10px_rgba(15,23,42,0.06)]';
+    bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-white border-t border-slate-200 shadow-[0_-2px_10px_rgba(15,23,42,0.06)]';
 
     let displayPhaseHint = phaseHint;
     if (luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
     if (illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
 
-    const info = document.createElement('div');
-    info.className = 'flex-1 min-w-0';
-    info.innerHTML = `
-        <div class="text-[9px] font-black tracking-[0.18em] text-indigo-500 uppercase">${inPreparationPhase ? '準備階段' : PHASE_NAMES[currentPhaseIndex]}</div>
-        <div class="text-[13px] font-black text-slate-700 whitespace-nowrap overflow-hidden text-ellipsis">${displayPhaseHint || ''}</div>
-    `;
-    bar.appendChild(info);
-    bar.appendChild(buildMobileActionControls());
+    const step = document.createElement('div');
+    step.className = 'shrink-0 flex items-baseline gap-0.5 px-2 py-0.5 rounded-lg bg-indigo-50 border border-indigo-100';
+    step.innerHTML = inPreparationPhase
+        ? `<span class="text-[11px] font-black text-indigo-600 tracking-wider">準備</span>`
+        : `<span class="text-[13px] font-black text-indigo-600 leading-none">${currentPhaseIndex + 1}</span>
+           <span class="text-[9px] font-black text-indigo-300 leading-none">/${PHASE_NAMES.length}</span>`;
+    bar.appendChild(step);
+
+    const hint = document.createElement('div');
+    hint.className = 'flex-1 min-w-0 text-center text-[12px] font-black text-slate-600 whitespace-nowrap overflow-hidden text-ellipsis';
+    hint.innerText = displayPhaseHint || '';
+    bar.appendChild(hint);
+
+    const controls = buildMobileActionControls();
+    controls.classList.add('shrink-0');
+    bar.appendChild(controls);
     return bar;
 }
 
