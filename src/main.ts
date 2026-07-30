@@ -154,6 +154,30 @@ function ensureGlobalTooltipEl() {
     return el as HTMLDivElement;
 }
 
+// 原生 alert 會凍結整個瀏覽器、跳出系統對話框（手機上還會顯示網域），
+// 跟遊戲風格完全脫節，而且每次都要多按一下「確定」。
+// 改用畫面內的浮動提示：直接掛在 body，不需要經過 render()，
+// 所以不會被重繪吃掉，也不必為它加狀態。
+let toastTimer: number | null = null;
+
+function showToast(message: string) {
+    let el = document.getElementById('game-toast');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'game-toast';
+        el.className = 'fixed left-1/2 -translate-x-1/2 bottom-[22%] z-[4000] pointer-events-none px-4 py-2.5 rounded-xl bg-slate-900/92 text-white text-[13px] font-black tracking-wide shadow-2xl border border-white/10 max-w-[86%] text-center transition-opacity duration-200';
+        document.body.appendChild(el);
+    }
+    el.innerText = message;
+    el.style.opacity = '1';
+    if (toastTimer !== null) window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+        const cur = document.getElementById('game-toast');
+        if (cur) cur.style.opacity = '0';
+        toastTimer = null;
+    }, 1800);
+}
+
 function hideGlobalTooltip() {
     const el = document.getElementById('global-tooltip');
     if (!el) return;
@@ -732,27 +756,40 @@ function setMatchPlayerNamesForMode(mode: GameMode) {
     matchPlayerNames = ['玩家 A', '玩家 B'];
 }
 
-let showLeaveConfirm = false;
+// 「回首頁」和「重新開始」都會丟掉整場進度，所以共用同一套確認流程；
+// 已分出勝負就不必問（沒有進度可以失去）。
+type PendingExitAction = 'home' | 'restart';
+let pendingExitAction: PendingExitAction | null = null;
 
-// 遊戲中途離開會直接丟掉整場進度，所以要先確認；已分出勝負就不用問。
-function requestGoHome() {
+function requestExit(action: PendingExitAction) {
     if (appScreen === 'game' && !winner) {
-        showLeaveConfirm = true;
+        pendingExitAction = action;
         hideGlobalTooltip();
         render();
         return;
     }
-    goHome();
+    if (action === 'restart') restartMatch();
+    else goHome();
 }
 
-function cancelGoHome() {
-    showLeaveConfirm = false;
+function requestGoHome() {
+    requestExit('home');
+}
+
+function requestRestart() {
+    requestExit('restart');
+}
+
+function cancelExit() {
+    pendingExitAction = null;
     render();
 }
 
-function confirmGoHome() {
-    showLeaveConfirm = false;
-    goHome();
+function confirmExit() {
+    const action = pendingExitAction;
+    pendingExitAction = null;
+    if (action === 'restart') restartMatch();
+    else goHome();
 }
 
 // 遊戲畫面的返回鍵。
@@ -769,12 +806,23 @@ function renderGoHomeButton() {
     return btn;
 }
 
+function renderRestartButton() {
+    const btn = document.createElement('button');
+    btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
+    btn.setAttribute('aria-label', '重新開始');
+    btn.title = '重新開始';
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.2-6.9"></path><path d="M21 3v6h-6"></path></svg>';
+    btn.onclick = (e) => { e.stopPropagation(); requestRestart(); };
+    return btn;
+}
+
 function renderLeaveConfirmOverlay() {
-    if (!showLeaveConfirm) return null;
+    if (!pendingExitAction) return null;
+    const isRestart = pendingExitAction === 'restart';
 
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 z-[2600] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm';
-    overlay.onclick = () => cancelGoHome();
+    overlay.onclick = () => cancelExit();
 
     const modal = document.createElement('div');
     modal.className = 'w-full max-w-xs rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden';
@@ -782,23 +830,23 @@ function renderLeaveConfirmOverlay() {
     modal.innerHTML = `
         <div class="px-5 pt-5 pb-4 text-center">
             <div class="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">確認</div>
-            <div class="mt-2 text-lg font-black text-slate-800">要離開這場對局嗎？</div>
-            <div class="mt-2 text-[12px] font-bold text-slate-500 leading-relaxed">對局還沒結束，離開後目前的進度會消失。</div>
+            <div class="mt-2 text-lg font-black text-slate-800">${isRestart ? '要重新開始嗎？' : '要離開這場對局嗎？'}</div>
+            <div class="mt-2 text-[12px] font-bold text-slate-500 leading-relaxed">對局還沒結束，${isRestart ? '重開' : '離開'}後目前的進度會消失。</div>
         </div>
         <div class="p-3 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-2">
             <button id="leaveCancel" class="py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-black text-xs tracking-widest active:scale-95">繼續遊戲</button>
-            <button id="leaveConfirm" class="py-2.5 rounded-xl bg-slate-900 text-white font-black text-xs tracking-widest active:scale-95">離開</button>
+            <button id="leaveConfirm" class="py-2.5 rounded-xl bg-slate-900 text-white font-black text-xs tracking-widest active:scale-95">${isRestart ? '重新開始' : '離開'}</button>
         </div>
     `;
-    (modal.querySelector('#leaveCancel') as HTMLElement).onclick = () => cancelGoHome();
-    (modal.querySelector('#leaveConfirm') as HTMLElement).onclick = () => confirmGoHome();
+    (modal.querySelector('#leaveCancel') as HTMLElement).onclick = () => cancelExit();
+    (modal.querySelector('#leaveConfirm') as HTMLElement).onclick = () => confirmExit();
     overlay.appendChild(modal);
     return overlay;
 }
 
 function goHome() {
     appScreen = 'home';
-    showLeaveConfirm = false;
+    pendingExitAction = null;
     selectedMode = null;
     // keep game state but hide winner overlay etc.
     winner = null;
@@ -2870,14 +2918,14 @@ function useEvasion(areaIdx) {
     if (currentPhaseIndex !== 3) return; // Defense Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'dodge') {
         if (p.evasionUsedIndices.includes(areaIdx)) {
-            alert('這張閃避卡本回合已使用過');
+            showToast('這張閃避卡本回合已使用過');
             return;
         }
         if (p.magic >= 3) {
@@ -2888,7 +2936,7 @@ function useEvasion(areaIdx) {
             }
             render();
         } else {
-            alert('魔力不足 (需要 3 點)');
+            showToast('魔力不足 (需要 3 點)');
         }
     }
 }
@@ -2913,13 +2961,13 @@ function targetEvasion(areaIdx, hitIdx) {
             addLog('閃避成功！消耗 3 點魔力已無視該次攻擊');
             render();
         } else {
-            alert('魔力不足 (需要 3 點)');
+            showToast('魔力不足 (需要 3 點)');
             evasionSelectionMode = false;
             evasionSourceAreaIdx = -1;
             render();
         }
     } else {
-        alert('只能閃避標準攻擊，無法閃避穿透傷害');
+        showToast('只能閃避標準攻擊，無法閃避穿透傷害');
     }
 }
 
@@ -2927,7 +2975,7 @@ function useShield(areaIdx) {
     if (currentPhaseIndex !== 3) return; // Defense Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
@@ -2939,7 +2987,7 @@ function useShield(areaIdx) {
             addLog(`${p.name} 使用了「護盾」，消耗 2 點魔力增加 1 點防禦`);
             render();
         } else {
-            alert('魔力不足 (需要 2 點)');
+            showToast('魔力不足 (需要 2 點)');
         }
     }
 }
@@ -2948,14 +2996,14 @@ function useMagicLuck(areaIdx) {
     if (currentPhaseIndex !== 2) return; // Judging Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'magic_luck') {
         if (p.magicLuckUsedIndices.includes(areaIdx)) {
-            alert('這張魔運卡本回合已使用過');
+            showToast('這張魔運卡本回合已使用過');
             return;
         }
         if (p.magic >= 2) {
@@ -2968,7 +3016,7 @@ function useMagicLuck(areaIdx) {
             handleJudging(); // Re-calculate Gale, Shadow, Brilliance, etc.
             render();
         } else {
-            alert('魔力不足 (需要 2 點)');
+            showToast('魔力不足 (需要 2 點)');
         }
     }
 }
@@ -2977,20 +3025,20 @@ function useIllusion(areaIdx) {
     if (currentPhaseIndex !== 2) return; // Judging Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
     if (card && card.effectId === 'illusion') {
         if (p.illusionUsedIndices.includes(areaIdx)) {
-            alert('幻象幽影本回合已使用過');
+            showToast('幻象幽影本回合已使用過');
             return;
         }
 
         const opp = getOpponent();
         const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
         if (!hasCopyableCard) {
-            alert('對手目前沒有可複製的招式卡');
+            showToast('對手目前沒有可複製的招式卡');
             return;
         }
 
@@ -3000,7 +3048,7 @@ function useIllusion(areaIdx) {
             addLog(`${p.name} 啟動「幻象幽影」，請選擇對手的一張招式卡複製`);
             render();
         } else {
-            alert('魔力不足 (需要 1 點)');
+            showToast('魔力不足 (需要 1 點)');
         }
     }
 }
@@ -3012,12 +3060,12 @@ function targetIllusion(oppAreaIdx) {
     const targetCard = opp.activeAreaEffects[oppAreaIdx];
 
     if (!targetCard) {
-        alert('該區域沒有招式卡可複製');
+        showToast('該區域沒有招式卡可複製');
         return;
     }
 
     if (ILLUSION_UNCOPYABLE_EFFECT_IDS.has(targetCard.effectId)) {
-        alert('不可複製該招式卡');
+        showToast('不可複製該招式卡');
         return;
     }
 
@@ -3042,7 +3090,7 @@ function useAmplify(areaIdx) {
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'amplify') {
         if (p.amplifyUsedIndices.includes(areaIdx)) {
-            alert('這張增幅卡本回合已使用過');
+            showToast('這張增幅卡本回合已使用過');
             return;
         }
         // No attacks => cannot meaningfully trigger.
@@ -3064,14 +3112,14 @@ function useReproduction(areaIdx) {
     if (currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'reproduction') {
         if (p.reproductionUsedIndices.includes(areaIdx)) {
-            alert('這張再現卡本回合已使用過');
+            showToast('這張再現卡本回合已使用過');
             return;
         }
         if (p.magic >= 2) {
@@ -3084,7 +3132,7 @@ function useReproduction(areaIdx) {
             }
             render();
         } else {
-            alert('魔力不足 (需要 2 點)');
+            showToast('魔力不足 (需要 2 點)');
         }
     }
 }
@@ -3093,14 +3141,14 @@ function useFlare(areaIdx) {
     if (currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'flare') {
         if (p.flareUsedIndices.includes(areaIdx)) {
-            alert('這張閃光卡本回合已使用過');
+            showToast('這張閃光卡本回合已使用過');
             return;
         }
         // No attacks => there is no selectable target badge, so don't enter selection mode.
@@ -3121,7 +3169,7 @@ function useFlare(areaIdx) {
             }
             render();
         } else {
-            alert('魔力不足 (需要 3 點)');
+            showToast('魔力不足 (需要 3 點)');
         }
     }
 }
@@ -3131,7 +3179,7 @@ function targetFlare(targetAreaIdx, atkIdx) {
     const p = getCurrentPlayer();
     
     if (p.magic < 3) {
-        alert('魔力不足 (需要 3 點)');
+        showToast('魔力不足 (需要 3 點)');
         flareSelectionMode = false;
         flareSourceAreaIdx = -1;
         render();
@@ -3160,7 +3208,7 @@ function targetFlare(targetAreaIdx, atkIdx) {
         flareSourceAreaIdx = -1;
         render();
     } else {
-        alert('只能對大於 0 的攻擊點數使用');
+        showToast('只能對大於 0 的攻擊點數使用');
     }
 }
 
@@ -3171,7 +3219,7 @@ function useThrust(areaIdx) {
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'thrust') {
         if (p.thrustUsedIndices.includes(areaIdx)) {
-            alert('這張突刺卡本回合已使用過');
+            showToast('這張突刺卡本回合已使用過');
             return;
         }
 
@@ -3190,7 +3238,7 @@ function useThrust(areaIdx) {
             addLog(`${p.name} 使用了「突刺」，將 ${transformedCount} 個強度為 1 或 2 的攻擊翻倍`);
             render();
         } else {
-            alert('沒有強度為 1 或 2 的普通攻擊可翻倍');
+            showToast('沒有強度為 1 或 2 的普通攻擊可翻倍');
         }
     }
 }
@@ -3209,14 +3257,14 @@ function useForest(areaIdx) {
     if (currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'forest') {
         if (p.forestUsedIndices.includes(areaIdx)) {
-            alert('這張森林卡本回合已使用過');
+            showToast('這張森林卡本回合已使用過');
             return;
         }
         if (p.magic >= 3) {
@@ -3235,7 +3283,7 @@ function useForest(areaIdx) {
             addLog(`${p.name} 使用了「森林」，消耗 3 點魔力將全場攻擊合併至區域 ${areaIdx + 1}`);
             render();
         } else {
-            alert('魔力不足 (需要 3 點)');
+            showToast('魔力不足 (需要 3 點)');
         }
     }
 }
@@ -3247,11 +3295,11 @@ function useFrost(areaIdx) {
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'frost') {
         if (p.frostUsedIndices.includes(areaIdx)) {
-            alert('這張冰霜卡本回合已使用過');
+            showToast('這張冰霜卡本回合已使用過');
             return;
         }
         if (diceResults.length === 0) {
-            alert('請先擲骰後再使用冰霜');
+            showToast('請先擲骰後再使用冰霜');
             return;
         }
         
@@ -3298,7 +3346,7 @@ function useHolyLight(areaIdx) {
     if (!validPhases.includes(currentPhaseIndex)) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
@@ -3311,7 +3359,7 @@ function useHolyLight(areaIdx) {
             addLog(`${p.name} 使用了「聖光」，消耗 2 點魔力回復 1 點生命`);
             render();
         } else {
-            alert('魔力不足 (需要 2 點)');
+            showToast('魔力不足 (需要 2 點)');
         }
     }
 }
@@ -3322,7 +3370,7 @@ function useSoulSnatch(areaIdx) {
     const p = getCurrentPlayer();
     const opp = getOpponent();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
@@ -3342,7 +3390,7 @@ function useSoulSnatch(areaIdx) {
             }
             render();
         } else {
-            alert('魔力不足 (需要 3 點)');
+            showToast('魔力不足 (需要 3 點)');
         }
     }
 }
@@ -3423,7 +3471,7 @@ function targetReproduction(targetAreaIdx, atkIdx) {
     const p = getCurrentPlayer();
     
     if (p.magic < 2) {
-        alert('魔力不足 (需要 2 點)');
+        showToast('魔力不足 (需要 2 點)');
         reproductionSelectionMode = false;
         reproductionSourceAreaIdx = -1;
         render();
@@ -3455,7 +3503,7 @@ function useFate(areaIdx) {
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'fate') {
         if (p.fateUsedIndices.includes(areaIdx)) {
-            alert('這張命運卡本回合已使用過');
+            showToast('這張命運卡本回合已使用過');
             return;
         }
         fateSelectionMode = !fateSelectionMode;
@@ -3697,7 +3745,7 @@ function playToBoard(areaIdx) {
     }
 
     if (p.cardsPlayedThisTurn >= 3) {
-        alert('每回合最多出 3 張牌');
+        showToast('每回合最多出 3 張牌');
         return;
     }
 
@@ -3724,14 +3772,14 @@ function useBarrier(areaIdx) {
     if (currentPhaseIndex !== 3) return; // Defense Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'barrier') {
         if (p.barrierUsedIndices.includes(areaIdx)) {
-            alert('這張屏障卡本回合已使用過');
+            showToast('這張屏障卡本回合已使用過');
             return;
         }
         if (p.magic >= 3) {
@@ -3741,7 +3789,7 @@ function useBarrier(areaIdx) {
             addLog(`${p.name} 使用了「屏障」，消耗 3 點魔力增加 3 點防禦`);
             render();
         } else {
-            alert('魔力不足 (需要 3 點)');
+            showToast('魔力不足 (需要 3 點)');
         }
     }
 }
@@ -3750,7 +3798,7 @@ function useCharge(areaIdx, hitIdx = -1) {
     if (currentPhaseIndex !== 5) return; 
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     
@@ -3767,7 +3815,7 @@ function useCharge(areaIdx, hitIdx = -1) {
                 chargeSourceAreaIdx = -1;
                 render();
             } else {
-                alert('魔力不足 (需要 2 點)');
+                showToast('魔力不足 (需要 2 點)');
                 chargeSelectionMode = false;
                 chargeSourceAreaIdx = -1;
                 render();
@@ -3776,14 +3824,14 @@ function useCharge(areaIdx, hitIdx = -1) {
              // If they clicked the area but not a specific badge
              render();
         } else {
-            alert('無法對該數值進行充能');
+            showToast('無法對該數值進行充能');
         }
     } else {
         // Step 1: Selecting the charge source card
         const card = p.activeAreaEffects[areaIdx];
         if (card && getEffectiveEffectId(p, areaIdx) === 'charge') {
             if (p.chargeUsedIndices.includes(areaIdx)) {
-                alert('這張充能卡本回合已使用過');
+                showToast('這張充能卡本回合已使用過');
                 return;
             }
             if (p.magic >= 2) {
@@ -3791,7 +3839,7 @@ function useCharge(areaIdx, hitIdx = -1) {
                 chargeSourceAreaIdx = areaIdx;
                 render();
             } else {
-                alert('魔力不足 (需要 2 點)');
+                showToast('魔力不足 (需要 2 點)');
             }
         }
     }
@@ -3801,7 +3849,7 @@ function useMagicBullet(areaIdx) {
     if (currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
-        alert('「幻境」生效中，無法消耗魔力發動效果');
+        showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
 
@@ -3814,7 +3862,7 @@ function useMagicBullet(areaIdx) {
             p.currentAttacks[areaIdx].push(2);
             render();
         } else {
-            alert('魔力不足 (需要 1 點)');
+            showToast('魔力不足 (需要 1 點)');
         }
     }
 }
@@ -3855,114 +3903,140 @@ function getMobileCardFrameStyleVars(size: 'board' | 'hand' | 'market') {
 }
 
 function renderMobileTopBar(typeColors) {
+    void typeColors;
+    // 頂列：左＝返回首頁、中＝標題、右＝卡牌介紹。
+    // 階段與提示都由底部操作列負責，這裡不重複顯示。
     const wrap = document.createElement('div');
-    wrap.className = 'h-12 px-3 border-b border-slate-200 bg-white/90 backdrop-blur flex items-center justify-between shrink-0';
+    wrap.className = 'h-12 px-3 border-b border-slate-200 bg-white/90 backdrop-blur flex items-center justify-between shrink-0 relative';
 
-    // Left: info button (effects list)
     const left = document.createElement('div');
     left.className = 'flex items-center gap-2';
-    left.innerHTML = `
-        <button id="infoBtn" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 active:scale-95 shadow-sm border border-slate-200">
+    left.appendChild(renderGoHomeButton());
+    left.appendChild(renderRestartButton());
+
+    const center = document.createElement('div');
+    center.className = 'absolute left-1/2 -translate-x-1/2 pointer-events-none';
+    center.innerHTML = `<div class="text-[15px] font-black text-slate-800 tracking-[0.12em]">像素對決</div>`;
+
+    const right = document.createElement('div');
+    right.className = 'flex items-center';
+    right.innerHTML = `
+        <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 active:scale-95 shadow-sm border border-slate-200">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
         </button>
-        <div class="text-[10px] font-black text-slate-700 tracking-wider">${inPreparationPhase ? '準備' : PHASE_NAMES[currentPhaseIndex]}</div>
     `;
-    (left.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
-    left.insertBefore(renderGoHomeButton(), left.firstChild);
+    (right.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
 
-    // Center: phase hint (mobile 版縮小字體，避免擠壓左右按鈕)
-    const center = document.createElement('div');
-    center.className = 'absolute left-1/2 -translate-x-1/2 max-w-[58%] text-center';
-
-    let displayPhaseHint = phaseHint;
-    if (luckySelectionMode) {
-        displayPhaseHint = '幸運：移除1骰';
-    }
-    if (illusionSelectionMode) {
-        displayPhaseHint = '幻象：選對手卡';
-    }
-
-    // 讓 mobile 的提示字比桌機更小、且單行截斷
-    center.innerHTML = `
-        <div class="text-[9px] font-black text-slate-500 tracking-wider whitespace-nowrap overflow-hidden text-ellipsis">
-            ${displayPhaseHint || ''}
-        </div>
-    `;
-
-    // Right: actions
-    const right = document.createElement('div');
-    right.className = 'flex items-center gap-2';
-
-    // Game over: show go-home only (per requirement: 關閉後右上按鈕改成回到首頁)
-    if (winner && winModalDismissed) {
-        const btn = document.createElement('button');
-        btn.className = 'bg-slate-900 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
-        btn.innerText = '回到首頁';
-        btn.onclick = () => goHome();
-        right.appendChild(btn);
-    } else if (winner) {
-        // Winner modal 未關閉時：右上不顯示任何操作（避免跟 modal 按鈕重複）
-    } else
-
-    if (inPreparationPhase) {
-        const btn = document.createElement('button');
-        const prepDone = players[1].cardsPlayedThisTurn >= 1;
-        btn.className = `px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${prepDone ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-300'}`;
-        btn.innerText = '開始';
-        if (prepDone) {
-            btn.onclick = () => {
-                inPreparationPhase = false;
-                currentPlayerIndex = 0;
-                currentPhaseIndex = 0;
-                selectedHandCardIndex = -1;
-                diceResults = [];
-                skippedPlayBecauseNoHand = false;
-                // Mobile：出牌階段時手牌抽屜自動彈出
-                // 並切到手牌 tab
-                mobileDockTab = 'hand';
-                handDrawerOpen = isMobileLayout();
-                players[0].cardsPlayedThisTurn = 0;
-                players[1].cardsPlayedThisTurn = 0;
-                phaseHint = '選牌出牌';
-                render();
-            };
-        }
-        right.appendChild(btn);
-    } else if (currentPhaseIndex === 1 && diceResults.length === 0) {
-        const p = getCurrentPlayer();
-        const shouldRollFiveBecauseNoHand = p.hand.length === 0 && p.cardsPlayedThisTurn === 0;
-        const rollOptions = shouldRollFiveBecauseNoHand
-            ? [5]
-            : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
-        rollOptions.forEach(count => {
-            const btn = document.createElement('button');
-            btn.className = 'bg-slate-900 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
-            btn.innerText = `擲骰${count}`;
-            btn.onclick = () => rollDice(count);
-            right.appendChild(btn);
-        });
-    } else if (fateSelectionMode) {
-        const btn = document.createElement('button');
-        btn.className = 'bg-amber-600 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
-        btn.innerText = `重擲(${fateSelectedDiceIndices.length})`;
-        btn.onclick = confirmFate;
-        right.appendChild(btn);
-    } else {
-        const btn = document.createElement('button');
-        const isActionBlocked = (currentPhaseIndex === 1 && diceResults.length === 0) || luckySelectionMode;
-        const label = currentPhaseIndex === 6 ? '結束' : currentPhaseIndex === 4 ? '結算' : '繼續';
-        btn.className = `px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${isActionBlocked ? 'bg-slate-100 text-slate-300' : 'bg-indigo-600 text-white active:scale-95'}`;
-        btn.innerText = label;
-        if (!isActionBlocked) btn.onclick = nextPhase;
-        right.appendChild(btn);
-    }
-
-    // 需要 relative 才能讓 center 用 absolute 置中
-    wrap.classList.add('relative');
     wrap.appendChild(left);
     wrap.appendChild(center);
     wrap.appendChild(right);
     return wrap;
+}
+
+// 手機主要操作列：貼在手牌區正上方（拇指區），而不是畫面最頂端。
+// 用的是場地下方原本閒置的空間，所以場地不會被壓縮。
+function renderMobileActionBar() {
+    // 單行三欄：左＝階段 1~7、中＝提示、右＝按鈕。不換行，所以可以壓得很扁。
+    const bar = document.createElement('div');
+    bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-white border-t border-slate-200 shadow-[0_-2px_10px_rgba(15,23,42,0.06)]';
+
+    let displayPhaseHint = phaseHint;
+    if (luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
+    if (illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
+
+    const step = document.createElement('div');
+    step.className = 'shrink-0 px-2 py-1 rounded-lg bg-indigo-50 border border-indigo-100 text-[11px] font-black text-indigo-600 tracking-wider whitespace-nowrap';
+    step.innerText = inPreparationPhase ? '準備階段' : PHASE_NAMES[currentPhaseIndex];
+    bar.appendChild(step);
+
+    const hint = document.createElement('div');
+    hint.className = 'flex-1 min-w-0 text-center text-[12px] font-black text-slate-600 whitespace-nowrap overflow-hidden text-ellipsis';
+    hint.innerText = displayPhaseHint || '';
+    bar.appendChild(hint);
+
+    const controls = buildMobileActionControls();
+    controls.classList.add('shrink-0');
+    bar.appendChild(controls);
+    return bar;
+}
+
+function buildMobileActionControls() {
+        const right = document.createElement('div');
+        right.className = 'flex items-center gap-2';
+
+        // 對局結束且關掉勝利視窗後：要能直接重開，
+        // 否則只剩「回首頁再重選一次模式」這條路。
+        if (winner && winModalDismissed) {
+            const again = document.createElement('button');
+            again.className = 'bg-indigo-600 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+            again.innerText = '再來一場';
+            again.onclick = () => restartMatch();
+            right.appendChild(again);
+
+            const btn = document.createElement('button');
+            btn.className = 'bg-slate-900 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+            btn.innerText = '回到首頁';
+            btn.onclick = () => goHome();
+            right.appendChild(btn);
+        } else if (winner) {
+            // Winner modal 未關閉時：右上不顯示任何操作（避免跟 modal 按鈕重複）
+        } else
+
+        if (inPreparationPhase) {
+            const btn = document.createElement('button');
+            const prepDone = players[1].cardsPlayedThisTurn >= 1;
+            btn.className = `px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${prepDone ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-300'}`;
+            btn.innerText = '開始';
+            if (prepDone) {
+                btn.onclick = () => {
+                    inPreparationPhase = false;
+                    currentPlayerIndex = 0;
+                    currentPhaseIndex = 0;
+                    selectedHandCardIndex = -1;
+                    diceResults = [];
+                    skippedPlayBecauseNoHand = false;
+                    // Mobile：出牌階段時手牌抽屜自動彈出
+                    // 並切到手牌 tab
+                    mobileDockTab = 'hand';
+                    handDrawerOpen = isMobileLayout();
+                    players[0].cardsPlayedThisTurn = 0;
+                    players[1].cardsPlayedThisTurn = 0;
+                    phaseHint = '選牌出牌';
+                    render();
+                };
+            }
+            right.appendChild(btn);
+        } else if (currentPhaseIndex === 1 && diceResults.length === 0) {
+            const p = getCurrentPlayer();
+            const shouldRollFiveBecauseNoHand = p.hand.length === 0 && p.cardsPlayedThisTurn === 0;
+            const rollOptions = shouldRollFiveBecauseNoHand
+                ? [5]
+                : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
+            rollOptions.forEach(count => {
+                const btn = document.createElement('button');
+                btn.className = 'bg-slate-900 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+                btn.innerText = `擲骰${count}`;
+                btn.onclick = () => rollDice(count);
+                right.appendChild(btn);
+            });
+        } else if (fateSelectionMode) {
+            const btn = document.createElement('button');
+            btn.className = 'bg-amber-600 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+            btn.innerText = `重擲(${fateSelectedDiceIndices.length})`;
+            btn.onclick = confirmFate;
+            right.appendChild(btn);
+        } else {
+            const btn = document.createElement('button');
+            const isActionBlocked = (currentPhaseIndex === 1 && diceResults.length === 0) || luckySelectionMode;
+            const label = currentPhaseIndex === 6 ? '結束' : currentPhaseIndex === 4 ? '結算' : '繼續';
+            btn.className = `px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${isActionBlocked ? 'bg-slate-100 text-slate-300' : 'bg-indigo-600 text-white active:scale-95'}`;
+            btn.innerText = label;
+            if (!isActionBlocked) btn.onclick = nextPhase;
+            right.appendChild(btn);
+        }
+
+
+    return right;
 }
 
 function renderMobileMarketRow(typeColors) {
@@ -4579,6 +4653,7 @@ function renderMobileLayout(typeColors) {
 
     scroller.appendChild(inner);
     container.appendChild(scroller);
+    container.appendChild(renderMobileActionBar());
     container.appendChild(renderMobileHandDrawer(typeColors));
     return container;
 }
