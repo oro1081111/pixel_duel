@@ -732,8 +732,73 @@ function setMatchPlayerNamesForMode(mode: GameMode) {
     matchPlayerNames = ['玩家 A', '玩家 B'];
 }
 
+let showLeaveConfirm = false;
+
+// 遊戲中途離開會直接丟掉整場進度，所以要先確認；已分出勝負就不用問。
+function requestGoHome() {
+    if (appScreen === 'game' && !winner) {
+        showLeaveConfirm = true;
+        hideGlobalTooltip();
+        render();
+        return;
+    }
+    goHome();
+}
+
+function cancelGoHome() {
+    showLeaveConfirm = false;
+    render();
+}
+
+function confirmGoHome() {
+    showLeaveConfirm = false;
+    goHome();
+}
+
+// 遊戲畫面的返回鍵。
+// 注意：不要想用 z-index 讓它浮到電腦回合的攔截層之上 —— 頂列有 backdrop-blur，
+// 那會建立新的堆疊脈絡，子元素的 z 值只在該脈絡內有效，壓不過 fixed 的攔截層。
+// 電腦回合的逃生出口改由攔截層自己提供（見 renderComputerTurnGuard）。
+function renderGoHomeButton() {
+    const btn = document.createElement('button');
+    btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
+    btn.setAttribute('aria-label', '返回首頁');
+    btn.title = '返回首頁';
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V21h14V9.5"></path></svg>';
+    btn.onclick = (e) => { e.stopPropagation(); requestGoHome(); };
+    return btn;
+}
+
+function renderLeaveConfirmOverlay() {
+    if (!showLeaveConfirm) return null;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 z-[2600] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm';
+    overlay.onclick = () => cancelGoHome();
+
+    const modal = document.createElement('div');
+    modal.className = 'w-full max-w-xs rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden';
+    modal.onclick = (e) => e.stopPropagation();
+    modal.innerHTML = `
+        <div class="px-5 pt-5 pb-4 text-center">
+            <div class="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">確認</div>
+            <div class="mt-2 text-lg font-black text-slate-800">要離開這場對局嗎？</div>
+            <div class="mt-2 text-[12px] font-bold text-slate-500 leading-relaxed">對局還沒結束，離開後目前的進度會消失。</div>
+        </div>
+        <div class="p-3 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-2">
+            <button id="leaveCancel" class="py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-black text-xs tracking-widest active:scale-95">繼續遊戲</button>
+            <button id="leaveConfirm" class="py-2.5 rounded-xl bg-slate-900 text-white font-black text-xs tracking-widest active:scale-95">離開</button>
+        </div>
+    `;
+    (modal.querySelector('#leaveCancel') as HTMLElement).onclick = () => cancelGoHome();
+    (modal.querySelector('#leaveConfirm') as HTMLElement).onclick = () => confirmGoHome();
+    overlay.appendChild(modal);
+    return overlay;
+}
+
 function goHome() {
     appScreen = 'home';
+    showLeaveConfirm = false;
     selectedMode = null;
     // keep game state but hide winner overlay etc.
     winner = null;
@@ -3292,9 +3357,21 @@ function renderComputerTurnGuard() {
 
     const guard = document.createElement('div');
     guard.className = 'fixed inset-0 z-[2000] cursor-not-allowed';
-    const swallow = (e: Event) => { e.preventDefault(); e.stopPropagation(); };
+
+    // 逃生出口：擋住整個畫面的同時，仍要讓玩家能離開對局
+    // （否則 AI 萬一卡住就只能重新整理）。
+    const escapeHome = renderGoHomeButton();
+    escapeHome.classList.add('absolute', 'top-2', 'left-3', 'cursor-pointer');
+
+    const swallow = (e: Event) => {
+        const t = e.target as Node | null;
+        if (t && escapeHome.contains(t)) return; // 放行返回鍵
+        e.preventDefault();
+        e.stopPropagation();
+    };
     ['pointerdown', 'pointerup', 'click', 'touchstart', 'touchend', 'contextmenu']
         .forEach(type => guard.addEventListener(type, swallow, {capture: true}));
+    guard.appendChild(escapeHome);
 
     const badge = document.createElement('div');
     badge.className = 'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-1.5 rounded-full bg-slate-900/75 text-white text-[11px] font-black tracking-widest shadow-lg pointer-events-none';
@@ -3791,6 +3868,7 @@ function renderMobileTopBar(typeColors) {
         <div class="text-[10px] font-black text-slate-700 tracking-wider">${inPreparationPhase ? '準備' : PHASE_NAMES[currentPhaseIndex]}</div>
     `;
     (left.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
+    left.insertBefore(renderGoHomeButton(), left.firstChild);
 
     // Center: phase hint (mobile 版縮小字體，避免擠壓左右按鈕)
     const center = document.createElement('div');
@@ -4535,6 +4613,9 @@ function render() {
         const aiGuard = renderComputerTurnGuard();
         if (aiGuard) root.appendChild(aiGuard);
 
+        const leaveModal = renderLeaveConfirmOverlay();
+        if (leaveModal) root.appendChild(leaveModal);
+
         // Winner modal (mobile)
         const win = renderWinModalOverlay();
         if (win) root.appendChild(win);
@@ -4613,6 +4694,7 @@ function render() {
     `;
     centralBar.appendChild(leftSection);
     (leftSection.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
+    leftSection.appendChild(renderGoHomeButton());
 
     // 2. Center Phase Indicator
     const phaseSection = document.createElement('div');
@@ -4745,6 +4827,9 @@ function render() {
 
     const aiGuardDesktop = renderComputerTurnGuard();
     if (aiGuardDesktop) root.appendChild(aiGuardDesktop);
+
+    const leaveModalDesktop = renderLeaveConfirmOverlay();
+    if (leaveModalDesktop) root.appendChild(leaveModalDesktop);
 
     // Winner modal (desktop)
     const win = renderWinModalOverlay();
