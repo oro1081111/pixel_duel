@@ -3727,6 +3727,16 @@ function selectHandCard(idx) {
     render();
 }
 
+// 這回合還能不能再出牌。用來讓手牌在達到上限時變成不可點選
+// （視覺上比照「非購買階段的市場」：淡化 + 不給游標 + 不綁事件）。
+// 準備階段：只有後手能出，且只能出 1 張；出牌階段：上限 3 張。
+function canPlayMoreCardsThisTurn() {
+    if (currentPhaseIndex !== 0) return false;
+    const p = getCurrentPlayer();
+    if (inPreparationPhase) return currentPlayerIndex === 1 && p.cardsPlayedThisTurn < 1;
+    return p.cardsPlayedThisTurn < 3;
+}
+
 function playToBoard(areaIdx) {
     if (currentPhaseIndex !== 0) return;
     if (selectedHandCardIndex === -1) return;
@@ -4279,7 +4289,7 @@ function renderMobilePlayerBlock(
             const slotSize = position === 'bottom' ? 'h-[200px] min-h-[110px]' : 'h-[200px]';
             slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             // 拖曳出牌的放置目標（不需要先選牌，所以條件比點擊版寬鬆）
-            if (isCurrent && currentPhaseIndex === 0) slot.setAttribute('data-play-zone', String(aIdx));
+            if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const atkContainer = document.createElement('div');
@@ -4591,11 +4601,12 @@ function renderMobileHandDrawer(typeColors) {
                 const cardEl = document.createElement('div');
                 const isSelected = selectedHandCardIndex === hIdx;
                 // shrink-0：避免被 flex 壓縮，確保可左右滑動
-                cardEl.className = `card-frame shrink-0 shadow-sm group relative transition-all ${currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : ''}`;
+                const selectable = canPlayMoreCardsThisTurn();
+                cardEl.className = `card-frame shrink-0 shadow-sm group relative transition-all ${selectable ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : ''}`;
                 cardEl.setAttribute('style', getMobileCardFrameStyleVars('hand'));
                 cardEl.innerHTML = renderCardPngHTML(card.effectId, card.effectName);
                 attachCardTooltip(cardEl, {effectId: card.effectId, alt: card.effectName});
-                if (currentPhaseIndex === 0) {
+                if (selectable) {
                     cardEl.onclick = () => selectHandCard(hIdx);
                     attachHandCardDrag(cardEl, hIdx);
                 }
@@ -5048,7 +5059,7 @@ function renderPlayerArea(idx: 0 | 1) {
 
         const slot = document.createElement('div');
         slot.className = `minimal-slot w-[160px] h-[140px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
-        if (isCurrent && currentPhaseIndex === 0) slot.setAttribute('data-play-zone', String(aIdx));
+        if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
         
         if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) {
             slot.onclick = () => playToBoard(aIdx);
@@ -5372,11 +5383,12 @@ function renderPlayerArea(idx: 0 | 1) {
         const cardEl = document.createElement('div');
         const isSelected = (isCurrent && selectedHandCardIndex === hIdx);
 
-        cardEl.className = `card-frame shadow-sm group relative transition-all ${isCurrent && currentPhaseIndex === 0 ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : 'hover:-translate-y-1 hover:border-slate-400'}`;
+        const selectable = isCurrent && canPlayMoreCardsThisTurn();
+        cardEl.className = `card-frame shadow-sm group relative transition-all ${selectable ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : (selectable ? 'hover:-translate-y-1 hover:border-slate-400' : '')}`;
         cardEl.setAttribute('style', getCardFrameStyleVars('hand'));
         cardEl.innerHTML = renderCardPngHTML(card.effectId, card.effectName);
                 attachCardTooltip(cardEl, {effectId: card.effectId, alt: card.effectName});
-        if (isCurrent && currentPhaseIndex === 0) {
+        if (selectable) {
             cardEl.onclick = () => selectHandCard(hIdx);
             attachHandCardDrag(cardEl, hIdx);
         }
