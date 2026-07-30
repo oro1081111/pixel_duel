@@ -806,6 +806,66 @@ function renderGoHomeButton() {
     return btn;
 }
 
+let showGameGuide = false;
+
+function toggleGameGuide() {
+    showGameGuide = !showGameGuide;
+    hideGlobalTooltip();
+    render();
+}
+
+// 遊戲說明按鈕（頂列右側，與卡牌一覽並排）
+function renderGuideButton() {
+    const btn = document.createElement('button');
+    btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
+    btn.setAttribute('aria-label', '遊戲說明');
+    btn.title = '遊戲說明';
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9.1 9a3 3 0 1 1 4.2 2.7c-.8.4-1.3 1.2-1.3 2.1v.2"></path><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>';
+    btn.onclick = (e) => { e.stopPropagation(); toggleGameGuide(); };
+    return btn;
+}
+
+// 內容與「規則說明」整頁同一份，深色底才能正確呈現原本的樣式。
+function renderGameGuideOverlay() {
+    if (!showGameGuide) return null;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[2500] flex items-center justify-center p-4';
+    overlay.onclick = () => toggleGameGuide();
+
+    const modal = document.createElement('div');
+    modal.className = 'w-full max-w-2xl max-h-[82dvh] rounded-2xl bg-[#0b1220] text-white shadow-2xl border border-white/10 overflow-hidden flex flex-col';
+    modal.onclick = (e) => e.stopPropagation();
+
+    const header = document.createElement('div');
+    header.className = 'px-5 py-4 border-b border-white/10 flex items-center justify-between shrink-0';
+    header.innerHTML = `
+        <div>
+            <div class="text-[9px] font-black tracking-[0.35em] text-indigo-200 uppercase">Pixel Duel</div>
+            <div class="mt-0.5 text-lg font-black">遊戲說明</div>
+        </div>
+        <button id="closeGuide" aria-label="關閉" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-200 active:scale-95">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+    `;
+    (header.querySelector('#closeGuide') as HTMLElement).onclick = () => toggleGameGuide();
+
+    const body = document.createElement('div');
+    body.className = 'flex-1 overflow-y-auto px-5 pb-5';
+    body.innerHTML = renderRulesContentHTML();
+
+    const footer = document.createElement('div');
+    footer.className = 'p-3 border-t border-white/10 shrink-0';
+    footer.innerHTML = `<button id="closeGuideBtn" class="w-full bg-white/10 hover:bg-white/15 border border-white/15 text-white py-2.5 rounded-xl font-black text-[12px] tracking-widest uppercase active:scale-95">關閉說明</button>`;
+    (footer.querySelector('#closeGuideBtn') as HTMLElement).onclick = () => toggleGameGuide();
+
+    modal.appendChild(header);
+    modal.appendChild(body);
+    modal.appendChild(footer);
+    overlay.appendChild(modal);
+    return overlay;
+}
+
 function renderRestartButton() {
     const btn = document.createElement('button');
     btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
@@ -847,6 +907,7 @@ function renderLeaveConfirmOverlay() {
 function goHome() {
     appScreen = 'home';
     pendingExitAction = null;
+    showGameGuide = false;
     selectedMode = null;
     // keep game state but hide winner overlay etc.
     winner = null;
@@ -975,20 +1036,10 @@ function renderHomeScreen() {
     return wrap;
 }
 
-function renderRulesScreen() {
-    const wrap = document.createElement('div');
-    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans p-6';
-
-    wrap.innerHTML = `
-        <div class="mx-auto w-full max-w-3xl">
-            <div class="flex items-center justify-between">
-                <div>
-                    <div class="text-[10px] font-black tracking-[0.4em] text-indigo-200 uppercase">PIXEL DUEL</div>
-                    <div class="mt-1 text-3xl font-black">規則說明</div>
-                </div>
-                <button id="backHome" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">返回首頁</button>
-            </div>
-
+// 規則內容同時給「規則說明」整頁與遊戲中的「遊戲說明」彈窗使用，
+// 只寫一份，避免兩邊各自漂移。
+function renderRulesContentHTML() {
+    return `
             <a
                 id="physicalRulebookBtn"
                 href="${PHYSICAL_RULEBOOK_URL}"
@@ -1141,6 +1192,23 @@ function renderRulesScreen() {
                     </ul>
                 </div>
             </div>
+    `;
+}
+
+function renderRulesScreen() {
+    const wrap = document.createElement('div');
+    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans p-6';
+
+    wrap.innerHTML = `
+        <div class="mx-auto w-full max-w-3xl">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-[10px] font-black tracking-[0.4em] text-indigo-200 uppercase">PIXEL DUEL</div>
+                    <div class="mt-1 text-3xl font-black">規則說明</div>
+                </div>
+                <button id="backHome" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">返回首頁</button>
+            </div>
+            ${renderRulesContentHTML()}
         </div>
     `;
 
@@ -3929,13 +3997,14 @@ function renderMobileTopBar(typeColors) {
     center.innerHTML = `<div class="text-[15px] font-black text-slate-800 tracking-[0.12em]">像素對決</div>`;
 
     const right = document.createElement('div');
-    right.className = 'flex items-center';
+    right.className = 'flex items-center gap-2';
     right.innerHTML = `
         <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 active:scale-95 shadow-sm border border-slate-200">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
         </button>
     `;
     (right.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
+    right.insertBefore(renderGuideButton(), right.firstChild);
 
     wrap.appendChild(left);
     wrap.appendChild(center);
@@ -4699,6 +4768,9 @@ function render() {
         const aiGuard = renderComputerTurnGuard();
         if (aiGuard) root.appendChild(aiGuard);
 
+        const guideModal = renderGameGuideOverlay();
+        if (guideModal) root.appendChild(guideModal);
+
         const leaveModal = renderLeaveConfirmOverlay();
         if (leaveModal) root.appendChild(leaveModal);
 
@@ -4780,7 +4852,9 @@ function render() {
     `;
     centralBar.appendChild(leftSection);
     (leftSection.querySelector('#infoBtn') as HTMLElement).onclick = toggleEffectList;
+    leftSection.appendChild(renderGuideButton());
     leftSection.appendChild(renderGoHomeButton());
+    leftSection.appendChild(renderRestartButton());
 
     // 2. Center Phase Indicator
     const phaseSection = document.createElement('div');
@@ -4913,6 +4987,9 @@ function render() {
 
     const aiGuardDesktop = renderComputerTurnGuard();
     if (aiGuardDesktop) root.appendChild(aiGuardDesktop);
+
+    const guideModalDesktop = renderGameGuideOverlay();
+    if (guideModalDesktop) root.appendChild(guideModalDesktop);
 
     const leaveModalDesktop = renderLeaveConfirmOverlay();
     if (leaveModalDesktop) root.appendChild(leaveModalDesktop);
