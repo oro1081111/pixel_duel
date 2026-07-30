@@ -66,6 +66,39 @@ body {
  * 統一卡牌外觀：場上卡牌與手牌卡牌都共用同一個結構。
  * - 透過 CSS 變數控制尺寸（手牌會設定較小的變數）
  */
+/*
+ * 手機長按卡牌是「放大預覽」，不是要叫出系統選單。
+ * contextmenu 的 preventDefault 對 Android 有效，但 iOS Safari 的
+ * 「分享／儲存影像」面板只能用 -webkit-touch-callout 關掉。
+ */
+.card-frame,
+.card-frame img,
+#global-tooltip,
+#global-tooltip img,
+.card-drag-ghost,
+.card-drag-ghost img {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 拖曳出牌：跟著手指移動的卡牌殘影 */
+.card-drag-ghost {
+  position: fixed;
+  z-index: 6000;
+  pointer-events: none;
+  opacity: 0.92;
+  transform-origin: center;
+  filter: drop-shadow(0 10px 18px rgb(15 23 42 / 0.45));
+}
+
+/* 拖曳出牌：手指下方的可放置區域 */
+.minimal-slot.drop-active {
+  @apply border-indigo-500 bg-indigo-50;
+  box-shadow: 0 0 0 4px rgb(99 102 241 / 0.25);
+}
+
 .card-frame {
   width: var(--card-w, 70px);
   height: var(--card-h, 100px);

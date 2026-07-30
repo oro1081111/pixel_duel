@@ -330,6 +330,119 @@ function attachCardTooltip(
     cardEl.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
+// --- 拖曳出牌 -------------------------------------------------------------
+// 手牌列本身是左右捲動的，所以只有「往上拖」才視為出牌，左右滑動留給捲動。
+const DRAG_START_THRESHOLD_PX = 12;
+
+function findPlayZoneAt(x: number, y: number) {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    const zone = el?.closest('[data-play-zone]') as HTMLElement | null;
+    if (!zone) return -1;
+    const idx = Number(zone.getAttribute('data-play-zone'));
+    return Number.isInteger(idx) ? idx : -1;
+}
+
+function setPlayZoneHighlight(areaIdx: number) {
+    document.querySelectorAll('[data-play-zone]').forEach(z => {
+        const on = Number(z.getAttribute('data-play-zone')) === areaIdx;
+        z.classList.toggle('drop-active', on);
+    });
+}
+
+function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
+    // 讓瀏覽器只處理左右捲動，垂直方向的手勢留給我們判斷。
+    cardEl.style.touchAction = 'pan-x';
+
+    let pointerId = -1;
+    let dragging = false;
+    let justDragged = false;
+    let startX = 0;
+    let startY = 0;
+    let ghost: HTMLElement | null = null;
+
+    const moveGhost = (x: number, y: number) => {
+        if (!ghost) return;
+        ghost.style.left = `${x}px`;
+        ghost.style.top = `${y}px`;
+    };
+
+    const cleanup = () => {
+        dragging = false;
+        ghost?.remove();
+        ghost = null;
+        setPlayZoneHighlight(-1);
+        cardEl.style.opacity = '';
+    };
+
+    cardEl.addEventListener('pointerdown', (e: PointerEvent) => {
+        if (currentPhaseIndex !== 0) return;
+        if (e.button > 0) return;
+        pointerId = e.pointerId;
+        startX = e.clientX;
+        startY = e.clientY;
+    });
+
+    cardEl.addEventListener('pointermove', (e: PointerEvent) => {
+        if (e.pointerId !== pointerId || currentPhaseIndex !== 0) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+
+        if (!dragging) {
+            // 觸控：手牌列本身要左右滑動捲動，所以只認「垂直為主」的手勢。
+            // 滑鼠：沒有這個衝突，而且桌機手牌在場地側邊，往往是水平移動，
+            //       所以任何方向只要超過門檻都算拖曳。
+            const far = Math.abs(dx) > DRAG_START_THRESHOLD_PX || Math.abs(dy) > DRAG_START_THRESHOLD_PX;
+            if (!far) return;
+            if (e.pointerType === 'touch' && (Math.abs(dy) < DRAG_START_THRESHOLD_PX || Math.abs(dx) > Math.abs(dy))) return;
+            dragging = true;
+            hideGlobalTooltip();
+            cardEl.setPointerCapture(e.pointerId);
+
+            const rect = cardEl.getBoundingClientRect();
+            ghost = cardEl.cloneNode(true) as HTMLElement;
+            ghost.classList.add('card-drag-ghost');
+            ghost.style.width = `${rect.width}px`;
+            ghost.style.height = `${rect.height}px`;
+            ghost.style.opacity = '0.92';
+            ghost.style.transform = 'translate(-50%, -50%) scale(1.12)';
+            document.body.appendChild(ghost);
+            cardEl.style.opacity = '0.35';
+        }
+
+        moveGhost(e.clientX, e.clientY);
+        setPlayZoneHighlight(findPlayZoneAt(e.clientX, e.clientY));
+        e.preventDefault();
+    });
+
+    cardEl.addEventListener('pointerup', (e: PointerEvent) => {
+        if (e.pointerId !== pointerId) return;
+        pointerId = -1;
+        if (!dragging) return;
+        const areaIdx = findPlayZoneAt(e.clientX, e.clientY);
+        cleanup();
+        // 放開後瀏覽器仍會補一個 click，別讓它又去選取這張牌
+        justDragged = true;
+        if (areaIdx >= 0) {
+            selectedHandCardIndex = handIdx;
+            playToBoard(areaIdx);
+        }
+    });
+
+    cardEl.addEventListener('pointercancel', (e: PointerEvent) => {
+        if (e.pointerId !== pointerId) return;
+        pointerId = -1;
+        if (dragging) justDragged = true;
+        cleanup();
+    });
+
+    cardEl.addEventListener('click', (e: MouseEvent) => {
+        if (!justDragged) return;
+        justDragged = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, {capture: true});
+}
+
 const PHASE_NAMES = [
   '出牌階段',
   '擲骰階段',
@@ -3942,6 +4055,8 @@ function renderMobilePlayerBlock(
             // and the stacked cards are absolutely positioned so nothing blocks it).
             const slotSize = position === 'bottom' ? 'h-[200px] min-h-[110px]' : 'h-[200px]';
             slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            // 拖曳出牌的放置目標（不需要先選牌，所以條件比點擊版寬鬆）
+            if (isCurrent && currentPhaseIndex === 0) slot.setAttribute('data-play-zone', String(aIdx));
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const atkContainer = document.createElement('div');
@@ -4256,7 +4371,10 @@ function renderMobileHandDrawer(typeColors) {
                 cardEl.setAttribute('style', getMobileCardFrameStyleVars('hand'));
                 cardEl.innerHTML = renderCardPngHTML(card.effectId, card.effectName);
                 attachCardTooltip(cardEl, {effectId: card.effectId, alt: card.effectName});
-                if (currentPhaseIndex === 0) cardEl.onclick = () => selectHandCard(hIdx);
+                if (currentPhaseIndex === 0) {
+                    cardEl.onclick = () => selectHandCard(hIdx);
+                    attachHandCardDrag(cardEl, hIdx);
+                }
                 list.appendChild(cardEl);
             });
             if (p.hand.length === 0) {
@@ -4692,6 +4810,7 @@ function renderPlayerArea(idx: 0 | 1) {
 
         const slot = document.createElement('div');
         slot.className = `minimal-slot w-[160px] h-[140px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+        if (isCurrent && currentPhaseIndex === 0) slot.setAttribute('data-play-zone', String(aIdx));
         
         if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) {
             slot.onclick = () => playToBoard(aIdx);
@@ -5020,6 +5139,7 @@ function renderPlayerArea(idx: 0 | 1) {
                 attachCardTooltip(cardEl, {effectId: card.effectId, alt: card.effectName});
         if (isCurrent && currentPhaseIndex === 0) {
             cardEl.onclick = () => selectHandCard(hIdx);
+            attachHandCardDrag(cardEl, hIdx);
         }
         handWrap.appendChild(cardEl);
     });
