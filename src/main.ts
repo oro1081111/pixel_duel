@@ -756,27 +756,40 @@ function setMatchPlayerNamesForMode(mode: GameMode) {
     matchPlayerNames = ['玩家 A', '玩家 B'];
 }
 
-let showLeaveConfirm = false;
+// 「回首頁」和「重新開始」都會丟掉整場進度，所以共用同一套確認流程；
+// 已分出勝負就不必問（沒有進度可以失去）。
+type PendingExitAction = 'home' | 'restart';
+let pendingExitAction: PendingExitAction | null = null;
 
-// 遊戲中途離開會直接丟掉整場進度，所以要先確認；已分出勝負就不用問。
-function requestGoHome() {
+function requestExit(action: PendingExitAction) {
     if (appScreen === 'game' && !winner) {
-        showLeaveConfirm = true;
+        pendingExitAction = action;
         hideGlobalTooltip();
         render();
         return;
     }
-    goHome();
+    if (action === 'restart') restartMatch();
+    else goHome();
 }
 
-function cancelGoHome() {
-    showLeaveConfirm = false;
+function requestGoHome() {
+    requestExit('home');
+}
+
+function requestRestart() {
+    requestExit('restart');
+}
+
+function cancelExit() {
+    pendingExitAction = null;
     render();
 }
 
-function confirmGoHome() {
-    showLeaveConfirm = false;
-    goHome();
+function confirmExit() {
+    const action = pendingExitAction;
+    pendingExitAction = null;
+    if (action === 'restart') restartMatch();
+    else goHome();
 }
 
 // 遊戲畫面的返回鍵。
@@ -793,12 +806,23 @@ function renderGoHomeButton() {
     return btn;
 }
 
+function renderRestartButton() {
+    const btn = document.createElement('button');
+    btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
+    btn.setAttribute('aria-label', '重新開始');
+    btn.title = '重新開始';
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.2-6.9"></path><path d="M21 3v6h-6"></path></svg>';
+    btn.onclick = (e) => { e.stopPropagation(); requestRestart(); };
+    return btn;
+}
+
 function renderLeaveConfirmOverlay() {
-    if (!showLeaveConfirm) return null;
+    if (!pendingExitAction) return null;
+    const isRestart = pendingExitAction === 'restart';
 
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 z-[2600] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm';
-    overlay.onclick = () => cancelGoHome();
+    overlay.onclick = () => cancelExit();
 
     const modal = document.createElement('div');
     modal.className = 'w-full max-w-xs rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden';
@@ -806,23 +830,23 @@ function renderLeaveConfirmOverlay() {
     modal.innerHTML = `
         <div class="px-5 pt-5 pb-4 text-center">
             <div class="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">確認</div>
-            <div class="mt-2 text-lg font-black text-slate-800">要離開這場對局嗎？</div>
-            <div class="mt-2 text-[12px] font-bold text-slate-500 leading-relaxed">對局還沒結束，離開後目前的進度會消失。</div>
+            <div class="mt-2 text-lg font-black text-slate-800">${isRestart ? '要重新開始嗎？' : '要離開這場對局嗎？'}</div>
+            <div class="mt-2 text-[12px] font-bold text-slate-500 leading-relaxed">對局還沒結束，${isRestart ? '重開' : '離開'}後目前的進度會消失。</div>
         </div>
         <div class="p-3 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-2">
             <button id="leaveCancel" class="py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-black text-xs tracking-widest active:scale-95">繼續遊戲</button>
-            <button id="leaveConfirm" class="py-2.5 rounded-xl bg-slate-900 text-white font-black text-xs tracking-widest active:scale-95">離開</button>
+            <button id="leaveConfirm" class="py-2.5 rounded-xl bg-slate-900 text-white font-black text-xs tracking-widest active:scale-95">${isRestart ? '重新開始' : '離開'}</button>
         </div>
     `;
-    (modal.querySelector('#leaveCancel') as HTMLElement).onclick = () => cancelGoHome();
-    (modal.querySelector('#leaveConfirm') as HTMLElement).onclick = () => confirmGoHome();
+    (modal.querySelector('#leaveCancel') as HTMLElement).onclick = () => cancelExit();
+    (modal.querySelector('#leaveConfirm') as HTMLElement).onclick = () => confirmExit();
     overlay.appendChild(modal);
     return overlay;
 }
 
 function goHome() {
     appScreen = 'home';
-    showLeaveConfirm = false;
+    pendingExitAction = null;
     selectedMode = null;
     // keep game state but hide winner overlay etc.
     winner = null;
@@ -3886,8 +3910,9 @@ function renderMobileTopBar(typeColors) {
     wrap.className = 'h-12 px-3 border-b border-slate-200 bg-white/90 backdrop-blur flex items-center justify-between shrink-0 relative';
 
     const left = document.createElement('div');
-    left.className = 'flex items-center';
+    left.className = 'flex items-center gap-2';
     left.appendChild(renderGoHomeButton());
+    left.appendChild(renderRestartButton());
 
     const center = document.createElement('div');
     center.className = 'absolute left-1/2 -translate-x-1/2 pointer-events-none';
@@ -3920,11 +3945,8 @@ function renderMobileActionBar() {
     if (illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
 
     const step = document.createElement('div');
-    step.className = 'shrink-0 flex items-baseline gap-0.5 px-2 py-0.5 rounded-lg bg-indigo-50 border border-indigo-100';
-    step.innerHTML = inPreparationPhase
-        ? `<span class="text-[11px] font-black text-indigo-600 tracking-wider">準備</span>`
-        : `<span class="text-[13px] font-black text-indigo-600 leading-none">${currentPhaseIndex + 1}</span>
-           <span class="text-[9px] font-black text-indigo-300 leading-none">/${PHASE_NAMES.length}</span>`;
+    step.className = 'shrink-0 px-2 py-1 rounded-lg bg-indigo-50 border border-indigo-100 text-[11px] font-black text-indigo-600 tracking-wider whitespace-nowrap';
+    step.innerText = inPreparationPhase ? '準備階段' : PHASE_NAMES[currentPhaseIndex];
     bar.appendChild(step);
 
     const hint = document.createElement('div');
