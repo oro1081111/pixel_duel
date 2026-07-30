@@ -330,6 +330,25 @@ function attachCardTooltip(
     cardEl.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
+// 骰子改用骰面點數（白色點點）而不是數字。
+// 3x3 格中要點亮的格子索引，對應標準骰面排列。
+const DIE_PIP_CELLS: Record<number, number[]> = {
+    1: [4],
+    2: [0, 8],
+    3: [0, 4, 8],
+    4: [0, 2, 6, 8],
+    5: [0, 2, 4, 6, 8],
+    6: [0, 2, 3, 5, 6, 8],
+};
+
+function renderDiePipsHTML(value: number) {
+    const lit = DIE_PIP_CELLS[value] ?? [];
+    const cells = Array.from({length: 9}, (_, i) => lit.includes(i)
+        ? '<span class="w-[3.5px] h-[3.5px] rounded-full bg-white"></span>'
+        : '<span></span>').join('');
+    return `<span class="grid grid-cols-3 grid-rows-3 place-items-center w-full h-full p-[3.5px]">${cells}</span>`;
+}
+
 // --- 拖曳出牌 -------------------------------------------------------------
 // 觸控時手牌列本身要左右滑動捲動，所以只有垂直為主的手勢才算出牌。
 const DRAG_START_THRESHOLD_PX = 12;
@@ -828,8 +847,9 @@ function renderHomeScreen() {
                 </button>
             </div>
 
-            <div class="mt-6 sm:mt-8 text-center leading-relaxed">
-                <div class="text-[11px] font-bold text-slate-400">奧羅桌遊設計工作室-練習作品</div>
+            <div class="mt-4 sm:mt-8 text-center leading-relaxed">
+                <div class="text-[11px] font-bold text-slate-300">遊戲設計與美術：周允成-奧羅</div>
+                <div class="mt-1.5 text-[11px] font-bold text-slate-400">奧羅桌遊設計工作室-練習作品</div>
                 <div class="mt-0.5 text-[11px] font-bold text-slate-500">僅供推廣使用請勿做任何商業行為</div>
             </div>
         </div>
@@ -4320,8 +4340,9 @@ function renderMobilePlayerBlock(
                     const isLuckyTarget = luckySelectionMode;
                     const dIcon = document.createElement('div');
                     const diceColorClass = isSelected ? 'bg-amber-500 text-white ring-amber-300 animate-pulse' : (isFrostTarget ? 'bg-blue-400 text-white ring-blue-200 animate-pulse' : (isLuckyTarget ? 'bg-lime-500 text-white ring-lime-200 animate-pulse' : 'bg-slate-900 text-white ring-white'));
-                    dIcon.className = `w-6 h-6 rounded shadow-xl flex items-center justify-center font-black text-[10px] ring-2 ${diceColorClass} ${fateSelectionMode || frostSelectionMode || luckySelectionMode ? 'cursor-pointer active:scale-95' : ''}`;
-                    dIcon.innerText = val.toString();
+                    dIcon.className = `w-6 h-6 rounded shadow-xl ring-2 ${diceColorClass} ${fateSelectionMode || frostSelectionMode || luckySelectionMode ? 'cursor-pointer active:scale-95' : ''}`;
+                    dIcon.innerHTML = renderDiePipsHTML(val);
+                    dIcon.setAttribute('aria-label', `骰子 ${val}`);
                     if (fateSelectionMode) dIcon.onclick = () => toggleDiceIndexSelection(originalIdx);
                     else if (frostSelectionMode) dIcon.onclick = () => targetFrost(originalIdx);
                     else if (luckySelectionMode) dIcon.onclick = () => removeLuckyDie(originalIdx);
@@ -5151,8 +5172,9 @@ function renderPlayerArea(idx: 0 | 1) {
                 const dIcon = document.createElement('div');
                 // Smaller dice w-6 (24px)
                 const diceColorClass = isSelected ? 'bg-amber-500 text-white ring-amber-300 animate-pulse' : (isFrostTarget ? 'bg-blue-400 text-white ring-blue-200 animate-pulse' : (isLuckyTarget ? 'bg-lime-500 text-white ring-lime-200 animate-pulse' : 'bg-slate-900 text-white ring-white'));
-                dIcon.className = `w-6 h-6 rounded shadow-xl flex items-center justify-center font-black text-[10px] ring-2 ${diceColorClass} ${fateSelectionMode || frostSelectionMode || luckySelectionMode ? 'cursor-pointer hover:scale-110 active:scale-95' : ''}`;
-                dIcon.innerText = valStr;
+                dIcon.className = `w-6 h-6 rounded shadow-xl ring-2 ${diceColorClass} ${fateSelectionMode || frostSelectionMode || luckySelectionMode ? 'cursor-pointer hover:scale-110 active:scale-95' : ''}`;
+                dIcon.innerHTML = renderDiePipsHTML(val);
+                dIcon.setAttribute('aria-label', `骰子 ${valStr}`);
                 if (fateSelectionMode) dIcon.onclick = () => toggleDiceIndexSelection(originalIdx);
                 else if (frostSelectionMode) dIcon.onclick = () => targetFrost(originalIdx);
                 else if (luckySelectionMode) dIcon.onclick = () => removeLuckyDie(originalIdx);
