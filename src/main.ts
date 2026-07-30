@@ -331,7 +331,7 @@ function attachCardTooltip(
 }
 
 // --- 拖曳出牌 -------------------------------------------------------------
-// 手牌列本身是左右捲動的，所以只有「往上拖」才視為出牌，左右滑動留給捲動。
+// 觸控時手牌列本身要左右滑動捲動，所以只有垂直為主的手勢才算出牌。
 const DRAG_START_THRESHOLD_PX = 12;
 
 function findPlayZoneAt(x: number, y: number) {
@@ -349,6 +349,26 @@ function setPlayZoneHighlight(areaIdx: number) {
     });
 }
 
+// 每個 pointermove 都做 elementFromPoint + 改 left/top + 掃描所有放置區，會逼瀏覽器
+// 反覆重算版面，拖起來就會卡頓。改成：座標只用 transform（交給合成器）、
+// 命中測試與高亮改由 rAF 節流、而且只有在區域真的改變時才動 class。
+function createDragGhost(cardEl: HTMLElement) {
+    const rect = cardEl.getBoundingClientRect();
+    const ghost = cardEl.cloneNode(true) as HTMLElement;
+    ghost.classList.add('card-drag-ghost');
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    ghost.style.left = '0';
+    ghost.style.top = '0';
+    ghost.style.willChange = 'transform';
+    document.body.appendChild(ghost);
+    return ghost;
+}
+
+function positionDragGhost(ghost: HTMLElement, x: number, y: number) {
+    ghost.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%) scale(1.08)`;
+}
+
 function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
     // 讓瀏覽器只處理左右捲動，垂直方向的手勢留給我們判斷。
     cardEl.style.touchAction = 'pan-x';
@@ -359,17 +379,33 @@ function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
     let startX = 0;
     let startY = 0;
     let ghost: HTMLElement | null = null;
+    let rafId = 0;
+    let lastX = 0;
+    let lastY = 0;
+    let hoveredZone = -1;
 
-    const moveGhost = (x: number, y: number) => {
-        if (!ghost) return;
-        ghost.style.left = `${x}px`;
-        ghost.style.top = `${y}px`;
+    const flush = () => {
+        rafId = 0;
+        if (!dragging || !ghost) return;
+        positionDragGhost(ghost, lastX, lastY);
+        const zone = findPlayZoneAt(lastX, lastY);
+        if (zone !== hoveredZone) {
+            hoveredZone = zone;
+            setPlayZoneHighlight(zone);
+        }
+    };
+
+    const scheduleFlush = () => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(flush);
     };
 
     const cleanup = () => {
         dragging = false;
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         ghost?.remove();
         ghost = null;
+        hoveredZone = -1;
         setPlayZoneHighlight(-1);
         cardEl.style.opacity = '';
     };
@@ -397,20 +433,14 @@ function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
             dragging = true;
             hideGlobalTooltip();
             cardEl.setPointerCapture(e.pointerId);
-
-            const rect = cardEl.getBoundingClientRect();
-            ghost = cardEl.cloneNode(true) as HTMLElement;
-            ghost.classList.add('card-drag-ghost');
-            ghost.style.width = `${rect.width}px`;
-            ghost.style.height = `${rect.height}px`;
-            ghost.style.opacity = '0.92';
-            ghost.style.transform = 'translate(-50%, -50%) scale(1.12)';
-            document.body.appendChild(ghost);
+            ghost = createDragGhost(cardEl);
+            positionDragGhost(ghost, e.clientX, e.clientY);
             cardEl.style.opacity = '0.35';
         }
 
-        moveGhost(e.clientX, e.clientY);
-        setPlayZoneHighlight(findPlayZoneAt(e.clientX, e.clientY));
+        lastX = e.clientX;
+        lastY = e.clientY;
+        scheduleFlush();
         e.preventDefault();
     });
 
@@ -3232,6 +3262,27 @@ function useSoulSnatch(areaIdx) {
     }
 }
 
+// 電腦回合時，玩家不應該能操作電腦的介面。AI 是直接呼叫函式（不經過 DOM 事件），
+// 所以擋在 UI 層最安全：一層透明的攔截層蓋住整個遊戲畫面，
+// 不必去逐一拆掉幾十個 onclick，也不會誤擋到 AI 自己的動作。
+function renderComputerTurnGuard() {
+    if (appScreen !== 'game') return null;
+    if (!isComputerTurnNow()) return null;
+    if (winner) return null;
+
+    const guard = document.createElement('div');
+    guard.className = 'fixed inset-0 z-[2000] cursor-not-allowed';
+    const swallow = (e: Event) => { e.preventDefault(); e.stopPropagation(); };
+    ['pointerdown', 'pointerup', 'click', 'touchstart', 'touchend', 'contextmenu']
+        .forEach(type => guard.addEventListener(type, swallow, {capture: true}));
+
+    const badge = document.createElement('div');
+    badge.className = 'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-1.5 rounded-full bg-slate-900/75 text-white text-[11px] font-black tracking-widest shadow-lg pointer-events-none';
+    badge.innerText = '電腦回合';
+    guard.appendChild(badge);
+    return guard;
+}
+
 function renderWinModalOverlay() {
     if (!winner || winModalDismissed) return null;
 
@@ -4460,6 +4511,9 @@ function render() {
     if (isMobileLayout()) {
         root.appendChild(renderMobileLayout(typeColors));
 
+        const aiGuard = renderComputerTurnGuard();
+        if (aiGuard) root.appendChild(aiGuard);
+
         // Winner modal (mobile)
         const win = renderWinModalOverlay();
         if (win) root.appendChild(win);
@@ -4467,7 +4521,7 @@ function render() {
         // 手機版仍然需要效果列表 modal（沿用原本的 showEffectList render）
         if (showEffectList) {
             const overlay = document.createElement('div');
-            overlay.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1500] flex items-center justify-center p-4';
+            overlay.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4';
             overlay.onclick = () => { showEffectList = false; render(); };
             const modal = document.createElement('div');
             modal.className = 'bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[80vh]';
@@ -4668,13 +4722,16 @@ function render() {
 
     root.appendChild(container);
 
+    const aiGuardDesktop = renderComputerTurnGuard();
+    if (aiGuardDesktop) root.appendChild(aiGuardDesktop);
+
     // Winner modal (desktop)
     const win = renderWinModalOverlay();
     if (win) root.appendChild(win);
 
     if (showEffectList) {
         const overlay = document.createElement('div');
-        overlay.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4';
+        overlay.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4';
         overlay.onclick = () => { showEffectList = false; render(); };
         
         const modal = document.createElement('div');
