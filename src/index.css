@@ -12,6 +12,31 @@
   --slot-w: 90px;
 }
 
+/*
+ * 快速連點時瀏覽器會判定成「雙擊縮放」，把畫面局部放大。
+ * touch-action: manipulation 只關掉雙擊縮放，雙指 pinch 縮放仍然保留，
+ * 所以不會犧牲需要放大檢視的使用者。
+ * （手牌卡牌由 JS 設成 pan-x 以支援拖曳出牌，那同樣不含雙擊縮放。）
+ */
+html {
+  touch-action: manipulation;
+}
+
+button,
+.card-frame,
+.minimal-slot,
+.action-btn {
+  touch-action: manipulation;
+}
+
+/* 連點時不要選到文字（iOS 會跳出選取放大鏡） */
+button,
+.action-btn {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
 body {
   @apply bg-slate-50 antialiased;
   color: #0f172a;
