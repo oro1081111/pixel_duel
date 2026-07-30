@@ -5188,3 +5188,46 @@ window.addEventListener('orientationchange', () => {
     }
     render();
 });
+
+// --- 雙擊縮放防護 ---------------------------------------------------------
+// touch-action: manipulation 已經先擋一層，但實機上 iOS Safari 仍可能把 300ms
+// 內的兩次點擊判定成「雙擊縮放」，把整個網頁內容放大。
+//
+// 傳統做法是直接對第二次 touchend 呼叫 preventDefault，但那會連瀏覽器補送的
+// click 一起吃掉 —— 在這款需要快速連點（例如連按「繼續」）的遊戲裡等於壞掉。
+// 所以這裡攔掉預設行為之後，自己補送一次 click，功能維持不變。
+function installDoubleTapZoomGuard() {
+    let lastTouchEndAt = -Infinity;
+    let syntheticClickAt = -Infinity;
+    let syntheticClickTarget: EventTarget | null = null;
+
+    document.addEventListener('touchend', (e: TouchEvent) => {
+        const now = performance.now();
+        const isSecondTap = now - lastTouchEndAt <= 300;
+        lastTouchEndAt = now;
+
+        if (!isSecondTap) return;
+        if (e.touches.length > 0) return; // 多指手勢不干預（保留 pinch 縮放）
+
+        e.preventDefault();
+
+        const target = e.target as HTMLElement | null;
+        if (!target || typeof target.click !== 'function') return;
+        syntheticClickAt = now;
+        syntheticClickTarget = target;
+        target.click();
+    }, {passive: false});
+
+    // preventDefault 之後多數瀏覽器就不會再送 click，但萬一送了，
+    // 別讓同一次點擊變成兩下（合成的 click 是 isTrusted === false）。
+    document.addEventListener('click', (e: MouseEvent) => {
+        if (!e.isTrusted) return;
+        if (e.target !== syntheticClickTarget) return;
+        if (performance.now() - syntheticClickAt > 400) return;
+        syntheticClickTarget = null;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, {capture: true});
+}
+
+installDoubleTapZoomGuard();
