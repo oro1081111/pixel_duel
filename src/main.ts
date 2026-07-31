@@ -2575,10 +2575,11 @@ function nextPhase() {
           return;
       }
 
-       // 若完全沒有手牌：顯示跳過出牌階段，並在擲骰階段固定投 5 顆
-       if (p.hand.length === 0) {
+       // 只有「回合一開始就沒有手牌」才算跳過出牌階段（擲骰階段固定投 5 顆）。
+       // 把手牌打完不算 —— 那是正常出過牌，訊息會誤導。
+       if (p.hand.length === 0 && p.cardsPlayedThisTurn === 0) {
            skippedPlayBecauseNoHand = true;
-           phaseHint = '無手牌：跳過出牌';
+           phaseHint = '沒有手牌，直接進行擲骰';
        } else {
            skippedPlayBecauseNoHand = false;
        }
@@ -2644,7 +2645,9 @@ function nextPhase() {
       
       currentPlayerIndex = 1 - currentPlayerIndex;
       currentPhaseIndex = 0;
-      phaseHint = '選牌打出';
+      phaseHint = players[currentPlayerIndex].hand.length === 0
+          ? '沒有手牌，直接進行擲骰'
+          : '選牌打出';
       diceResults = [];
       skippedPlayBecauseNoHand = false;
       // Mobile：進入出牌階段時手牌抽屜自動彈出
@@ -3864,7 +3867,11 @@ function playToBoard(areaIdx) {
     if (inPreparationPhase) {
         phaseHint = '準備完成：按開始';
     } else {
-        phaseHint = `已出 ${p.cardsPlayedThisTurn}/3`;
+        // 出滿 3 張、或手牌剛好打完時，就不要再說「繼續出牌」。
+        const canPlayMore = p.cardsPlayedThisTurn < 3 && p.hand.length > 0;
+        phaseHint = canPlayMore
+            ? `已出${p.cardsPlayedThisTurn}張，繼續出牌或擲骰`
+            : `已出${p.cardsPlayedThisTurn}張，進行擲骰`;
     }
 
     render();
