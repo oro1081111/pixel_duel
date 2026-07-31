@@ -702,6 +702,18 @@ function resetGameStateForNewMatch() {
     showEffectList = false;
 
     phaseAdvanceLockUntil = 0;
+
+    // 這些是純畫面狀態，但沒清掉會帶進新的一局：
+    // 舊的手牌捲動位置會被還原、舊的浮動提示會殘留幾百毫秒。
+    mobileHandScrollLeft = 0;
+    desktopHandScrollLeft = [0, 0];
+    showGameGuide = false;
+    if (toastTimer !== null) {
+        window.clearTimeout(toastTimer);
+        toastTimer = null;
+    }
+    const staleToast = document.getElementById('game-toast');
+    if (staleToast) staleToast.style.opacity = '0';
 }
 
 function getComputerPlayerIndexForMode(mode: GameMode | null): 0 | 1 | null {
@@ -1261,13 +1273,44 @@ function buyFromDeck() {
     render();
 }
 
+// 卡牌說明尾端的 [判定階段][被動觸發] 之類註記，抽出來做成標籤，
+// 讓敘述本文乾淨、時機一眼可辨。
+function splitCardDesc(desc: string) {
+    const tags: string[] = [];
+    let text = (desc || '').trim();
+    while (true) {
+        const m = text.match(/\[([^\]]*)\]\s*$/);
+        if (!m) break;
+        const label = m[1].trim();
+        if (label) tags.unshift(label);
+        text = text.slice(0, m.index).trim();
+    }
+    return {text, tags};
+}
+
+function renderCardDescHTML(desc: string) {
+    const {text, tags} = splitCardDesc(desc);
+    const chips = tags.map(t => {
+        const passive = t.includes('被動');
+        const tone = passive
+            ? 'bg-amber-50 text-amber-700 border-amber-200'
+            : 'bg-indigo-50 text-indigo-700 border-indigo-200';
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-black tracking-wider ${tone}">${t}</span>`;
+    }).join('');
+    return `
+        <div class="text-slate-600 text-[11px] font-bold leading-relaxed">${text}</div>
+        ${chips ? `<div class="mt-1.5 flex flex-wrap gap-1">${chips}</div>` : ''}
+    `;
+}
+
 function toggleEffectList() {
     showEffectList = !showEffectList;
     render();
 }
 
 function addLog(msg) {
-    console.log(msg); // Ensure logs appear in AI Studio's log viewer
+    // 遊戲內已經有紀錄面板，正式版不需要再往 console 灌訊息
+    // （電腦回合每個動作都會呼叫這裡）。
     gameLog.push(msg);
     if (gameLog.length > 30) gameLog.shift(); // Keep more history
 }
@@ -2438,7 +2481,6 @@ async function runComputerTurnLoop() {
 // --- Initialization ---
 
 function initGame() {
-  console.log('正在初始化像素對決 MVP...');
   
   deck = [];
   let idCounter = 0;
@@ -2498,6 +2540,22 @@ function getCurrentPlayer() {
 
 function getOpponent() {
   return players[getOpponentIndex()];
+}
+
+// 主要動作按鈕被擋住的原因；沒被擋就回 null。
+// 之前按鈕只在「幸運模式」時變灰，但購買階段沒抽免費牌、出牌階段還沒出牌
+// 同樣會讓 nextPhase() 直接返回 —— 按鈕看起來能按卻沒反應。
+// 這裡把原因集中起來：按鈕依此變灰，中央提示也直接說明原因，
+// 使用者不必先按一下才知道被擋。
+function getActionBlockReason(): string | null {
+    // 準備階段的「開始」有自己的啟用條件（後手出滿 1 張），
+    // 這裡不要插手，否則會顯示錯的原因。
+    if (inPreparationPhase) return null;
+    if (luckySelectionMode) return '先處理幸運骰';
+    const p = getCurrentPlayer();
+    if (currentPhaseIndex === 0 && p.hand.length > 0 && p.cardsPlayedThisTurn === 0) return '至少出 1 張';
+    if (currentPhaseIndex === 6 && deck.length > 0 && buyDeckDrawCount < 1) return '先抽免費牌';
+    return null;
 }
 
 function nextPhase() {
@@ -2665,7 +2723,6 @@ function handleJudging() {
     const areaMagic = [0, 0, 0];
     const areaGold = [0, 0, 0];
 
-    console.log('--- 判定階段 ---');
     const diceCountsPerArea = [0, 0, 0];
     diceResults.forEach(val => {
         const areaIdx = Math.floor((val - 1) / 2);
@@ -3735,7 +3792,6 @@ function rollDice(count) {
     for (let i = 0; i < finalCount; i++) {
         diceResults.push(Math.floor(Math.random() * 6) + 1);
     }
-    console.log(`擲骰結果: ${diceResults}`);
     render();
 }
 
@@ -3810,7 +3866,6 @@ function playToBoard(areaIdx) {
     } else {
         phaseHint = `已出 ${p.cardsPlayedThisTurn}/3`;
     }
-    console.log(`玩家出牌: ${card.name} 到區域 ${areaIdx + 1}`);
 
     render();
 }
@@ -3988,7 +4043,7 @@ function renderMobileActionBar() {
     const bar = document.createElement('div');
     bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-white border-t border-slate-200 shadow-[0_-2px_10px_rgba(15,23,42,0.06)]';
 
-    let displayPhaseHint = phaseHint;
+    let displayPhaseHint = getActionBlockReason() || phaseHint;
     if (luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
     if (illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
 
@@ -4075,7 +4130,7 @@ function buildMobileActionControls() {
             right.appendChild(btn);
         } else {
             const btn = document.createElement('button');
-            const isActionBlocked = (currentPhaseIndex === 1 && diceResults.length === 0) || luckySelectionMode;
+            const isActionBlocked = getActionBlockReason() !== null;
             const label = currentPhaseIndex === 6 ? '結束' : currentPhaseIndex === 4 ? '結算' : '繼續';
             btn.className = `px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${isActionBlocked ? 'bg-slate-100 text-slate-300' : 'bg-indigo-600 text-white active:scale-95'}`;
             btn.innerText = label;
@@ -4770,8 +4825,7 @@ function render() {
                                     <span class="card-frame-chip ${typeColors[def.right.type]}" style="--chip: 16px; --chip-font: 8px;">${def.right.value}</span>
                                 </div>
                             </div>
-                            <div class="text-[10px] font-black text-slate-400 tracking-wider">PNG：${getCardPngFileName(def.imgNo)}</div>
-                            <div class="text-slate-600 text-[11px] font-bold leading-relaxed">${def.desc}</div>
+                            ${renderCardDescHTML(def.desc)}
                         </div>
                     `).join('')}
                 </div>
@@ -4931,7 +4985,7 @@ function render() {
         actionContainer.appendChild(btn);
     } else {
         const btn = document.createElement('button');
-        const isActionBlocked = (currentPhaseIndex === 1 && diceResults.length === 0) || luckySelectionMode;
+        const isActionBlocked = getActionBlockReason() !== null;
         const label = currentPhaseIndex === 6 ? '結束回合' : currentPhaseIndex === 4 ? '結算傷害' : '繼續';
         btn.className = `px-6 py-2 rounded-lg font-black text-xs uppercase tracking-widest transition-all ${isActionBlocked ? 'bg-slate-100 text-slate-300 cursor-not-allowed' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-500 active:scale-95'}`;
         btn.innerHTML = `${label} &rarr;`;
@@ -4996,8 +5050,7 @@ function render() {
                                 <span class="card-frame-chip ${typeColors[def.right.type]}" style="--chip: 16px; --chip-font: 8px;">${def.right.value}</span>
                             </div>
                         </div>
-                        <div class="text-[10px] font-black text-slate-400 tracking-wider">PNG：${getCardPngFileName(def.imgNo)}</div>
-                        <div class="text-slate-600 text-[11px] font-bold leading-relaxed">${def.desc}</div>
+                        ${renderCardDescHTML(def.desc)}
                     </div>
                 `).join('')}
             </div>
