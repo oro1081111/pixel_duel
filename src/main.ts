@@ -47,18 +47,6 @@ async function preloadCardImages() {
     await Promise.allSettled(tasks);
 }
 
-function getBaseUrl() {
-    // Vite sets BASE_URL for GitHub Pages deployments (repo sub-path)
-    const base = (import.meta as any)?.env?.BASE_URL as string | undefined;
-    return base || '/';
-}
-
-function joinUrl(base: string, path: string) {
-    const b = base.endsWith('/') ? base : `${base}/`;
-    const p = path.startsWith('/') ? path.slice(1) : path;
-    return `${b}${p}`;
-}
-
 function getCardPngFileName(imgNo: number) {
     // Use the required naming: pixel_duel-01.png, pixel_duel-02.png, ...
     const n = Math.max(0, Math.floor(imgNo));
@@ -125,21 +113,6 @@ function getCardFrameStyleVars(size: 'board' | 'hand' | 'market') {
     }
     // board
     return '--card-w: 70px; --card-h: 90px; --header-h: 22px; --chip: 15px; --chip-font: 8px; --title-font: 11px;';
-}
-
-function renderCardContentHTML(card, typeColors, {showTooltip}: {showTooltip: boolean}) {
-    // Tooltip 改為「portal」(掛到 body 的 fixed 浮層) 顯示，避免被任何 overflow 容器裁切。
-    // 這裡只渲染卡面本體。
-    void showTooltip;
-    return `
-        <div class="card-frame-header">
-            <div class="card-frame-chip ${typeColors[card.left.type]}">${card.left.value}</div>
-            <div class="card-frame-chip ${typeColors[card.right.type]}">${card.right.value}</div>
-        </div>
-        <div class="flex-1 flex items-center justify-center">
-            <div class="card-frame-title">${card.effectName}</div>
-        </div>
-    `;
 }
 
 function ensureGlobalTooltipEl() {
@@ -456,6 +429,10 @@ function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
     cardEl.addEventListener('pointerdown', (e: PointerEvent) => {
         if (currentPhaseIndex !== 0) return;
         if (e.button > 0) return;
+        // 新一輪互動：先清掉上一輪殘留的旗標。
+        // 觸控拖曳取消時瀏覽器不一定會補送 click，旗標留著就會把
+        // 下一次的正常點擊吃掉（使用者得點兩下才選得到牌）。
+        justDragged = false;
         pointerId = e.pointerId;
         startX = e.clientX;
         startY = e.clientY;
@@ -731,10 +708,6 @@ function getComputerPlayerIndexForMode(mode: GameMode | null): 0 | 1 | null {
     if (mode === 'cvp') return 0;
     if (mode === 'pvc') return 1;
     return null;
-}
-
-function isComputerMatchMode(mode: GameMode | null) {
-    return mode === 'cvp' || mode === 'pvc';
 }
 
 function isComputerTurnNow() {
@@ -1321,10 +1294,6 @@ function sleep(ms: number) {
     const safe = Math.max(0, Math.round(ms));
     const scaled = Math.max(0, Math.round(safe / Math.max(0.1, aiSpeed)));
     return new Promise<void>((resolve) => setTimeout(resolve, scaled));
-}
-
-function isAnySelectionModeActive() {
-    return luckySelectionMode || fateSelectionMode || evasionSelectionMode || illusionSelectionMode || frostSelectionMode || chargeSelectionMode || reproductionSelectionMode || flareSelectionMode;
 }
 
 function getAiName() {
