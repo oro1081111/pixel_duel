@@ -960,9 +960,31 @@ function finishPreparationPhase() {
     render();
 }
 
+// 首頁配色直接取自封面圖（用 canvas 取樣得到的實際色值）：
+//   深藍底 #16344c / #1c3a52、外框金 #c48e36、標題米金 #e7c980
+//   劍紅 #cd6b6a、盾藍 #7da2bc、藥水綠 #a2cd61、金幣黃 #d0c954
+// 像素風的關鍵是「硬邊」：直角、粗框、位移的實心陰影，不用圓角與模糊陰影。
+function renderHomeMenuButtonHTML(
+    id: string,
+    title: string,
+    subtitle: string,
+    accent: string,
+    extraClass = ''
+) {
+    return `
+        <button id="${id}" class="group relative block w-full text-left bg-[#16344c] hover:bg-[#1c3a52] border-[3px] border-[#c48e36] rounded-none px-4 py-3 shadow-[4px_4px_0_0_#011c31] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none ${extraClass}">
+            <span class="absolute left-0 top-0 bottom-0 w-[7px]" style="background:${accent}"></span>
+            <div class="pl-3">
+                <div class="text-[22px] leading-none font-black tracking-[0.06em] text-[#e7c980]">${title}</div>
+                <div class="mt-1.5 text-[13px] font-black leading-tight text-white/85">${subtitle}</div>
+            </div>
+        </button>
+    `;
+}
+
 function renderHomeScreen() {
     const wrap = document.createElement('div');
-    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans flex items-center justify-center p-4 sm:p-6';
+    wrap.className = 'min-h-[100dvh] w-full bg-[#0d2032] text-white font-sans flex items-center justify-center p-4 sm:p-6';
 
     wrap.innerHTML = `
         <div class="w-full max-w-3xl">
@@ -970,7 +992,7 @@ function renderHomeScreen() {
                 <img
                     src="${COVER_IMG_URL}"
                     alt="像素對決 PIXEL DUEL 封面"
-                    class="w-auto max-w-[300px] max-h-[32dvh] sm:max-w-[360px] sm:max-h-none rounded-2xl border border-white/15 shadow-xl shadow-black/40 select-none"
+                    class="card-thumb w-auto max-w-[300px] max-h-[28dvh] sm:max-w-[340px] sm:max-h-none rounded-none border-[3px] border-[#c48e36] shadow-[6px_6px_0_0_#011c31] select-none"
                     draggable="false"
                     loading="eager"
                     decoding="async"
@@ -978,38 +1000,19 @@ function renderHomeScreen() {
             </div>
 
             <div class="mt-6 sm:mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <button id="modePvp" class="rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] transition-all px-4 py-4 text-left shadow-lg shadow-indigo-900/30 border border-indigo-400/30">
-                    <div class="text-[9px] font-black tracking-[0.3em] text-indigo-200 uppercase">Mode</div>
-                    <div class="mt-1 text-lg font-black">PvP</div>
-                    <div class="mt-1 text-[11px] font-bold text-indigo-100/90">玩家 vs 玩家</div>
-                </button>
-
-                <button id="modeCvp" class="rounded-2xl bg-indigo-600/10 hover:bg-indigo-600/15 active:scale-[0.99] transition-all px-4 py-4 text-left border border-indigo-400/20">
-                    <div class="text-[9px] font-black tracking-[0.3em] text-slate-300 uppercase">Mode</div>
-                    <div class="mt-1 text-lg font-black">CvP</div>
-                    <div class="mt-1 text-[11px] font-bold text-slate-200/90">電腦 vs 玩家（電腦先手）</div>
-                </button>
-
-                <button id="modePvc" class="rounded-2xl bg-indigo-600/10 hover:bg-indigo-600/15 active:scale-[0.99] transition-all px-4 py-4 text-left border border-indigo-400/20">
-                    <div class="text-[9px] font-black tracking-[0.3em] text-slate-300 uppercase">Mode</div>
-                    <div class="mt-1 text-lg font-black">PvC</div>
-                    <div class="mt-1 text-[11px] font-bold text-slate-200/90">玩家 vs 電腦（玩家先手）</div>
-                </button>
+                ${renderHomeMenuButtonHTML('modePvp', 'PvP', '玩家 vs 玩家', '#cd6b6a')}
+                ${renderHomeMenuButtonHTML('modeCvp', 'CvP', '電腦先手 vs 玩家', '#7da2bc')}
+                ${renderHomeMenuButtonHTML('modePvc', 'PvC', '玩家先手 vs 電腦', '#a2cd61')}
             </div>
 
-            <!-- Make Rules button match the mode buttons' width (full width on mobile, 1-column width on desktop) -->
-            <div class="mt-4 sm:mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <button id="rulesBtn" class="sm:col-start-2 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 px-4 py-4 text-left shadow-lg shadow-black/20 transition-all active:scale-[0.99]">
-                    <div class="text-[9px] font-black tracking-[0.3em] text-slate-300 uppercase">Info</div>
-                    <div class="mt-1 text-lg font-black">規則</div>
-                    <div class="mt-1 text-[11px] font-bold text-slate-200/90">玩法教學 / 回合流程</div>
-                </button>
+            <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                ${renderHomeMenuButtonHTML('rulesBtn', '規則', '玩法教學 / 回合流程', '#d0c954', 'sm:col-start-2')}
             </div>
 
-            <div class="mt-4 sm:mt-8 text-center leading-relaxed">
-                <div class="text-[11px] font-bold text-slate-300">遊戲設計與美術：周允成-奧羅</div>
-                <div class="mt-1.5 text-[11px] font-bold text-slate-400">奧羅桌遊設計工作室-練習作品</div>
-                <div class="mt-0.5 text-[11px] font-bold text-slate-500">僅供推廣使用請勿做任何商業行為</div>
+            <div class="mt-5 sm:mt-8 text-center leading-relaxed">
+                <div class="text-[12px] font-black text-[#e7c980]/90">遊戲設計與美術：周允成-奧羅</div>
+                <div class="mt-1.5 text-[11px] font-bold text-white/45">奧羅桌遊設計工作室-練習作品</div>
+                <div class="mt-0.5 text-[11px] font-bold text-white/30">僅供推廣使用請勿做任何商業行為</div>
             </div>
         </div>
     `;
