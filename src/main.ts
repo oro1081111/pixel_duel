@@ -64,8 +64,8 @@ function getCardPngUrlByImgNo(imgNo: number) {
 // Relative path for the same reason as getCardPngUrlByImgNo (Vite `base`).
 const COVER_IMG_URL = 'cover/pixel_duel_cover.jpg';
 
-// 回合流程圖（來自實體桌遊的美術，已去背成 PNG）
-const TURN_FLOW_IMG_URL = 'rules/turn_flow.png';
+// 回合流程圖（實體桌遊的美術原圖，維持原本的背景不去背）
+const TURN_FLOW_IMG_URL = 'rules/turn_flow.jpg';
 
 // Physical board game rulebook (PDF hosted on Google Drive).
 const PHYSICAL_RULEBOOK_URL = 'https://drive.google.com/file/d/1ep-OoATJueR2ji2Bd_OXz4bokXQs7l-7/view?usp=drivesdk';
@@ -4104,19 +4104,19 @@ function renderMobileTopBar(typeColors) {
 function renderMobileActionBar() {
     // 單行三欄：左＝階段 1~7、中＝提示、右＝按鈕。不換行，所以可以壓得很扁。
     const bar = document.createElement('div');
-    bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-[#16344c] border-t-[3px] border-[#c48e36]';
+    bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-[#eceae5] border-t-[3px] border-[#603b2d]';
 
     let displayPhaseHint = getActionBlockReason() || phaseHint;
     if (luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
     if (illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
 
     const step = document.createElement('div');
-    step.className = 'shrink-0 px-2 py-1 rounded-none bg-[#0d2032] border-2 border-[#c48e36] text-[11px] font-black text-[#e7c980] tracking-wider whitespace-nowrap';
+    step.className = 'shrink-0 px-2 py-1 rounded-none bg-[#dcdad3] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420] tracking-wider whitespace-nowrap';
     step.innerText = inPreparationPhase ? '準備階段' : PHASE_NAMES[currentPhaseIndex];
     bar.appendChild(step);
 
     const hint = document.createElement('div');
-    hint.className = 'flex-1 min-w-0 text-center text-[12px] font-black text-white/85 whitespace-nowrap overflow-hidden text-ellipsis';
+    hint.className = 'flex-1 min-w-0 text-center text-[12px] font-black text-[#2a2420] whitespace-nowrap overflow-hidden text-ellipsis';
     hint.innerText = displayPhaseHint || '';
     bar.appendChild(hint);
 
@@ -4134,13 +4134,13 @@ function buildMobileActionControls() {
         // 否則只剩「回首頁再重選一次模式」這條路。
         if (winner && winModalDismissed) {
             const again = document.createElement('button');
-            again.className = 'bg-[#c48e36] text-[#0d2032] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#e7c980] active:translate-x-[2px] active:translate-y-[2px]';
+            again.className = 'bg-[#c48e36] text-[#2a2420] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#603b2d] active:translate-x-[2px] active:translate-y-[2px]';
             again.innerText = '再來一場';
             again.onclick = () => restartMatch();
             right.appendChild(again);
 
             const btn = document.createElement('button');
-            btn.className = 'bg-[#0d2032] text-[#e7c980] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#c48e36] active:translate-x-[2px] active:translate-y-[2px]';
+            btn.className = 'bg-[#16344c] text-[#e7c980] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#603b2d] active:translate-x-[2px] active:translate-y-[2px]';
             btn.innerText = '回到首頁';
             btn.onclick = () => goHome();
             right.appendChild(btn);
@@ -4151,7 +4151,7 @@ function buildMobileActionControls() {
         if (inPreparationPhase) {
             const btn = document.createElement('button');
             const prepDone = players[1].cardsPlayedThisTurn >= 1;
-            btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${prepDone ? 'bg-[#c48e36] text-[#0d2032] border-[#e7c980] shadow-[2px_2px_0_0_#011c31]' : 'bg-[#0d2032]/40 text-[#e7c980]/35 border-[#c48e36]/30'}`;
+            btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${prepDone ? 'bg-[#c48e36] text-[#2a2420] border-[#603b2d] shadow-[2px_2px_0_0_rgba(42,36,32,0.45)]' : 'bg-[#dcdad3] text-[#2a2420]/35 border-[#603b2d]/35'}`;
             btn.innerText = '開始';
             if (prepDone) {
                 btn.onclick = () => {
@@ -4195,7 +4195,7 @@ function buildMobileActionControls() {
             const btn = document.createElement('button');
             const isActionBlocked = getActionBlockReason() !== null;
             const label = currentPhaseIndex === 6 ? '結束' : currentPhaseIndex === 4 ? '結算' : '繼續';
-            btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${isActionBlocked ? 'bg-[#0d2032]/40 text-[#e7c980]/35 border-[#c48e36]/30' : 'bg-[#c48e36] text-[#0d2032] border-[#e7c980] shadow-[2px_2px_0_0_#011c31] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none'}`;
+            btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${isActionBlocked ? 'bg-[#dcdad3] text-[#2a2420]/35 border-[#603b2d]/35' : 'bg-[#c48e36] text-[#2a2420] border-[#603b2d] shadow-[2px_2px_0_0_rgba(42,36,32,0.45)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none'}`;
             btn.innerText = label;
             if (!isActionBlocked) btn.onclick = nextPhase;
             right.appendChild(btn);
@@ -4313,7 +4313,7 @@ function renderMobilePlayerBlock(
     header.className = 'flex items-center justify-between';
     header.innerHTML = `
         <div class="flex items-end gap-2">
-            <div class="text-2xl font-black ${isCurrent ? 'text-[#603b2d]' : 'text-[#603b2d]/45'} tracking-tight">${p.hp}</div>
+            <div class="text-2xl font-black ${isCurrent ? 'text-black' : 'text-black/40'} tracking-tight">${p.hp}</div>
             <div class="text-[10px] font-black text-[#2a2420]/70 tracking-widest">${p.name}${isCurrent ? '（回合）' : ''}</div>
         </div>
         ${position === 'bottom' ? `
