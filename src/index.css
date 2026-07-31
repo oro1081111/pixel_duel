@@ -37,6 +37,79 @@ button,
   -webkit-tap-highlight-color: transparent;
 }
 
+
+/*
+ * 像素風主題色。全部取自實際素材，不是憑感覺挑的：
+ *  - 卡牌 PNG 取樣：米色卡面 #e0c999、棕色卡框 #603b2d、黑色描邊
+ *  - 封面圖取樣：深藍 #16344c、金框 #c48e36、米金字 #e7c980
+ *  - 回合流程圖取樣：藥水綠 #a5cd5d、盾藍 #7ca1bb、心粉 #ce9cb5、
+ *    劍紅 #d07071、金幣黃 #d0c954
+ * 遊戲中用「卡牌那組」（米色紙面 + 棕框），選單與浮層用「封面那組」（深藍 + 金框），
+ * 這樣兩個情境各有主體，又共用同一套像素語彙。
+ */
+:root {
+  --px-ink: #2a1c10;
+  --px-parch: #efe0bf;
+  --px-parch-2: #e0c999;
+  --px-frame: #603b2d;
+  --px-navy: #16344c;
+  --px-navy-deep: #0d2032;
+  --px-gold: #c48e36;
+  --px-cream: #e7c980;
+  --px-red: #d07071;
+  --px-blue: #7ca1bb;
+  --px-green: #a5cd5d;
+  --px-yellow: #d0c954;
+  --px-pink: #ce9cb5;
+}
+
+/* 像素風的共通語彙：直角、粗框、位移實心陰影，不用圓角與模糊陰影 */
+.px-panel {
+  background: var(--px-parch);
+  border: 3px solid var(--px-frame);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 0 rgb(42 28 16 / 0.35);
+}
+
+.px-panel-dark {
+  background: var(--px-navy);
+  border: 3px solid var(--px-gold);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 0 #011c31;
+}
+
+.px-btn {
+  background: var(--px-navy);
+  color: var(--px-cream);
+  border: 3px solid var(--px-gold);
+  border-radius: 0;
+  box-shadow: 3px 3px 0 0 #011c31;
+  @apply font-black tracking-wider px-3 py-1.5;
+}
+.px-btn:active {
+  transform: translate(3px, 3px);
+  box-shadow: none;
+}
+.px-btn[disabled], .px-btn.is-disabled {
+  background: #cbbfa6;
+  color: #8a7d66;
+  border-color: #8a7d66;
+  box-shadow: 3px 3px 0 0 rgb(42 28 16 / 0.25);
+}
+
+.px-chip {
+  border-radius: 0;
+  border: 2px solid var(--px-frame);
+  background: var(--px-parch);
+  color: var(--px-ink);
+  @apply px-2 py-0.5 text-[11px] font-black;
+}
+
+/* 圖片維持像素銳利，不要被瀏覽器平滑化 */
+.px-crisp {
+  image-rendering: pixelated;
+}
+
 body {
   @apply bg-slate-50 antialiased;
   color: #0f172a;

@@ -64,6 +64,9 @@ function getCardPngUrlByImgNo(imgNo: number) {
 // Relative path for the same reason as getCardPngUrlByImgNo (Vite `base`).
 const COVER_IMG_URL = 'cover/pixel_duel_cover.jpg';
 
+// 回合流程圖（來自實體桌遊的美術，已去背成 PNG）
+const TURN_FLOW_IMG_URL = 'rules/turn_flow.png';
+
 // Physical board game rulebook (PDF hosted on Google Drive).
 const PHYSICAL_RULEBOOK_URL = 'https://drive.google.com/file/d/1ep-OoATJueR2ji2Bd_OXz4bokXQs7l-7/view?usp=drivesdk';
 
@@ -783,7 +786,7 @@ function confirmExit() {
 // 電腦回合的逃生出口改由攔截層自己提供（見 renderComputerTurnGuard）。
 function renderGoHomeButton() {
     const btn = document.createElement('button');
-    btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
+    btn.className = 'w-8 h-8 rounded-none bg-[#0d2032] flex items-center justify-center text-[#e7c980] hover:bg-[#1c3a52] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none shadow-[2px_2px_0_0_#011c31] border-2 border-[#c48e36]';
     btn.setAttribute('aria-label', '返回首頁');
     btn.title = '返回首頁';
     btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V21h14V9.5"></path></svg>';
@@ -802,7 +805,7 @@ function toggleGameGuide() {
 // 遊戲說明按鈕（頂列右側，與卡牌一覽並排）
 function renderGuideButton() {
     const btn = document.createElement('button');
-    btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
+    btn.className = 'w-8 h-8 rounded-none bg-[#0d2032] flex items-center justify-center text-[#e7c980] hover:bg-[#1c3a52] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none shadow-[2px_2px_0_0_#011c31] border-2 border-[#c48e36]';
     btn.setAttribute('aria-label', '遊戲說明');
     btn.title = '遊戲說明';
     btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9.1 9a3 3 0 1 1 4.2 2.7c-.8.4-1.3 1.2-1.3 2.1v.2"></path><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>';
@@ -819,17 +822,17 @@ function renderGameGuideOverlay() {
     overlay.onclick = () => toggleGameGuide();
 
     const modal = document.createElement('div');
-    modal.className = 'w-full max-w-2xl max-h-[82dvh] rounded-2xl bg-[#0b1220] text-white shadow-2xl border border-white/10 overflow-hidden flex flex-col';
+    modal.className = 'w-full max-w-2xl max-h-[82dvh] px-panel-dark text-white overflow-hidden flex flex-col';
     modal.onclick = (e) => e.stopPropagation();
 
     const header = document.createElement('div');
-    header.className = 'px-5 py-4 border-b border-white/10 flex items-center justify-between shrink-0';
+    header.className = 'px-5 py-4 border-b-[3px] border-[#c48e36] flex items-center justify-between shrink-0';
     header.innerHTML = `
         <div>
-            <div class="text-[9px] font-black tracking-[0.35em] text-indigo-200 uppercase">Pixel Duel</div>
-            <div class="mt-0.5 text-lg font-black">遊戲說明</div>
+            <div class="text-[9px] font-black tracking-[0.35em] text-[#c48e36] uppercase">Pixel Duel</div>
+            <div class="mt-0.5 text-lg font-black text-[#e7c980]">遊戲說明</div>
         </div>
-        <button id="closeGuide" aria-label="關閉" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-200 active:scale-95">
+        <button id="closeGuide" aria-label="關閉" class="w-8 h-8 rounded-none bg-[#0d2032] hover:bg-[#1c3a52] flex items-center justify-center text-[#e7c980] border-2 border-[#c48e36] active:translate-x-[2px] active:translate-y-[2px]">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
     `;
@@ -840,8 +843,8 @@ function renderGameGuideOverlay() {
     body.innerHTML = renderRulesContentHTML();
 
     const footer = document.createElement('div');
-    footer.className = 'p-3 border-t border-white/10 shrink-0';
-    footer.innerHTML = `<button id="closeGuideBtn" class="w-full bg-white/10 hover:bg-white/15 border border-white/15 text-white py-2.5 rounded-xl font-black text-[12px] tracking-widest uppercase active:scale-95">關閉說明</button>`;
+    footer.className = 'p-3 border-t-[3px] border-[#c48e36] shrink-0';
+    footer.innerHTML = `<button id="closeGuideBtn" class="w-full bg-[#0d2032] hover:bg-[#1c3a52] border-2 border-[#c48e36] text-[#e7c980] py-2.5 rounded-none font-black text-[12px] tracking-widest active:translate-x-[2px] active:translate-y-[2px]">關閉說明</button>`;
     (footer.querySelector('#closeGuideBtn') as HTMLElement).onclick = () => toggleGameGuide();
 
     modal.appendChild(header);
@@ -853,7 +856,7 @@ function renderGameGuideOverlay() {
 
 function renderRestartButton() {
     const btn = document.createElement('button');
-    btn.className = 'w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200';
+    btn.className = 'w-8 h-8 rounded-none bg-[#0d2032] flex items-center justify-center text-[#e7c980] hover:bg-[#1c3a52] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none shadow-[2px_2px_0_0_#011c31] border-2 border-[#c48e36]';
     btn.setAttribute('aria-label', '重新開始');
     btn.title = '重新開始';
     btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.2-6.9"></path><path d="M21 3v6h-6"></path></svg>';
@@ -870,17 +873,17 @@ function renderLeaveConfirmOverlay() {
     overlay.onclick = () => cancelExit();
 
     const modal = document.createElement('div');
-    modal.className = 'w-full max-w-xs rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden';
+    modal.className = 'w-full max-w-xs px-panel overflow-hidden';
     modal.onclick = (e) => e.stopPropagation();
     modal.innerHTML = `
         <div class="px-5 pt-5 pb-4 text-center">
-            <div class="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">確認</div>
-            <div class="mt-2 text-lg font-black text-slate-800">${isRestart ? '要重新開始嗎？' : '要離開這場對局嗎？'}</div>
-            <div class="mt-2 text-[12px] font-bold text-slate-500 leading-relaxed">對局還沒結束，${isRestart ? '重開' : '離開'}後目前的進度會消失。</div>
+            <div class="text-[10px] font-black text-[#603b2d]/70 uppercase tracking-[0.3em]">確認</div>
+            <div class="mt-2 text-lg font-black text-[#2a1c10]">${isRestart ? '要重新開始嗎？' : '要離開這場對局嗎？'}</div>
+            <div class="mt-2 text-[12px] font-bold text-[#603b2d] leading-relaxed">對局還沒結束，${isRestart ? '重開' : '離開'}後目前的進度會消失。</div>
         </div>
-        <div class="p-3 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-2">
-            <button id="leaveCancel" class="py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-black text-xs tracking-widest active:scale-95">繼續遊戲</button>
-            <button id="leaveConfirm" class="py-2.5 rounded-xl bg-slate-900 text-white font-black text-xs tracking-widest active:scale-95">${isRestart ? '重新開始' : '離開'}</button>
+        <div class="p-3 bg-[#e0c999] border-t-[3px] border-[#603b2d] grid grid-cols-2 gap-2">
+            <button id="leaveCancel" class="py-2.5 rounded-none bg-[#efe0bf] border-2 border-[#603b2d] text-[#2a1c10] font-black text-xs tracking-widest active:translate-x-[2px] active:translate-y-[2px]">繼續遊戲</button>
+            <button id="leaveConfirm" class="py-2.5 rounded-none bg-[#16344c] text-[#e7c980] border-2 border-[#c48e36] font-black text-xs tracking-widest active:translate-x-[2px] active:translate-y-[2px]">${isRestart ? '重新開始' : '離開'}</button>
         </div>
     `;
     (modal.querySelector('#leaveCancel') as HTMLElement).onclick = () => cancelExit();
@@ -1033,49 +1036,62 @@ function renderRulesContentHTML() {
                 href="${PHYSICAL_RULEBOOK_URL}"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="mt-6 flex items-center justify-between gap-3 rounded-2xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 px-5 py-4 shadow-lg shadow-black/20 transition-all active:scale-[0.99]"
+                class="mt-4 flex items-center justify-between gap-3 bg-[#c48e36] hover:bg-[#d0a04a] border-[3px] border-[#603b2d] px-5 py-3.5 shadow-[4px_4px_0_0_#011c31] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none"
             >
                 <div>
-                    <div class="text-[9px] font-black tracking-[0.3em] text-amber-200 uppercase">PDF</div>
-                    <div class="mt-1 text-lg font-black text-white">實體桌遊說明書</div>
-                    <div class="mt-1 text-[11px] font-bold text-amber-100/90">開啟完整規則書（另開新分頁）</div>
+                    <div class="text-[9px] font-black tracking-[0.3em] text-[#2a1c10]/70 uppercase">PDF</div>
+                    <div class="mt-0.5 text-lg font-black text-[#2a1c10]">實體桌遊說明書</div>
+                    <div class="mt-0.5 text-[11px] font-bold text-[#2a1c10]/75">開啟完整規則書（另開新分頁）</div>
                 </div>
-                <div class="text-2xl text-amber-200 shrink-0" aria-hidden="true">↗</div>
+                <div class="text-2xl text-[#2a1c10] shrink-0" aria-hidden="true">↗</div>
             </a>
 
-            <div class="mt-4 space-y-4 text-slate-200/90">
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">勝利條件</div>
+            <div class="mt-4 space-y-3 text-white/85">
+                <div class="px-panel p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#603b2d]">回合流程</div>
+                    <div class="mt-3 flex justify-center">
+                        <img
+                            src="${TURN_FLOW_IMG_URL}"
+                            alt="回合流程：出牌 擲骰 判定 防禦 傷害 攻擊 購買"
+                            class="px-crisp card-thumb w-auto max-w-[300px] sm:max-w-[340px] select-none"
+                            draggable="false"
+                            loading="lazy"
+                            decoding="async"
+                        />
+                    </div>
+                </div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">勝利條件</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         讓對手的 <span class="text-white">HP（生命值）</span> 變成 0（或以下）即可獲勝。
                     </div>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">四個屬性</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">四個屬性</div>
                     <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                        <div class="bg-[#0d2032] border-2 border-[#c48e36]/60 p-3">
                             <div class="text-[11px] font-black text-red-200 tracking-wider">攻擊 Attack</div>
                             <div class="mt-1 text-[13px] font-black text-white">造成傷害</div>
                             <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
                                 會在對手的「傷害階段」結算。一般攻擊會先被對手的防禦抵擋；部分效果可能造成無視防禦的傷害。
                             </div>
                         </div>
-                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                        <div class="bg-[#0d2032] border-2 border-[#c48e36]/60 p-3">
                             <div class="text-[11px] font-black text-blue-200 tracking-wider">防禦 Defense</div>
                             <div class="mt-1 text-[13px] font-black text-white">抵擋攻擊</div>
                             <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
                                 主要用來扣抵對手的「一般攻擊」。例如對手打出 4 點攻擊，你有 2 點防禦，則只會受到 2 點傷害。
                             </div>
                         </div>
-                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                        <div class="bg-[#0d2032] border-2 border-[#c48e36]/60 p-3">
                             <div class="text-[11px] font-black text-emerald-200 tracking-wider">魔力 Magic</div>
                             <div class="mt-1 text-[13px] font-black text-white">施放/啟動效果</div>
                             <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
                                 用於啟動部分卡牌效果（例如強化攻擊、閃避、追加骰子等）。魔力通常在「判定階段」獲得。
                             </div>
                         </div>
-                        <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                        <div class="bg-[#0d2032] border-2 border-[#c48e36]/60 p-3">
                             <div class="text-[11px] font-black text-amber-200 tracking-wider">金幣 Gold</div>
                             <div class="mt-1 text-[13px] font-black text-white">購買卡牌</div>
                             <div class="mt-2 text-sm font-bold leading-relaxed text-slate-200/90">
@@ -1085,16 +1101,16 @@ function renderRulesContentHTML() {
                     </div>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">開局</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">開局</div>
                     <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
                         <li>先手起手 3 張、後手起手 4 張。</li>
                         <li>遊戲開始會先進入一次 <span class="text-white">準備</span>：後手先打出 1 張牌到任一區域，然後按「開始」。</li>
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">出牌階段</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">出牌階段</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         從手牌打出牌到 3 個區域。
                     </div>
@@ -1105,8 +1121,8 @@ function renderRulesContentHTML() {
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">擲骰階段</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">擲骰階段</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         選擇擲骰數量並擲骰。骰子會落在不同區域，影響後續的屬性結算。
                     </div>
@@ -1116,8 +1132,8 @@ function renderRulesContentHTML() {
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">判定階段</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">判定階段</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         依骰子落點與你各區域的卡牌屬性，結算本回合獲得的 <span class="text-white">攻擊 / 防禦 / 魔力 / 金幣</span>。
                     </div>
@@ -1127,8 +1143,8 @@ function renderRulesContentHTML() {
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">防禦階段</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">防禦階段</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         面對對手上一回合留下的攻擊，你可以使用防禦值或特定效果來降低傷害。
                     </div>
@@ -1138,8 +1154,8 @@ function renderRulesContentHTML() {
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">傷害階段</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">傷害階段</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         結算對手對你造成的傷害，並扣除你的 HP。
                     </div>
@@ -1149,8 +1165,8 @@ function renderRulesContentHTML() {
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">攻擊階段</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">攻擊階段</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         你在判定後形成的攻擊（以及此階段可啟動的攻擊效果）會準備完成，並留到對手回合結算。
                     </div>
@@ -1159,8 +1175,8 @@ function renderRulesContentHTML() {
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">購買階段</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">購買階段</div>
                     <div class="mt-3 text-sm font-bold leading-relaxed">
                         使用金幣購買卡牌，讓你的手牌與牌組變強。
                     </div>
@@ -1171,8 +1187,8 @@ function renderRulesContentHTML() {
                     </ul>
                 </div>
 
-                <div class="rounded-2xl bg-white/5 border border-white/10 p-5">
-                    <div class="text-[12px] font-black tracking-widest uppercase text-indigo-200">操作方式</div>
+                <div class="px-panel-dark p-4">
+                    <div class="text-[12px] font-black tracking-widest text-[#e7c980]">操作方式</div>
                     <ul class="mt-3 list-disc pl-5 text-sm font-bold leading-relaxed">
                         <li>桌機：滑鼠移到卡牌可看效果說明（tooltip）。</li>
                         <li>手機：長按卡牌可看效果說明。</li>
@@ -1185,16 +1201,16 @@ function renderRulesContentHTML() {
 
 function renderRulesScreen() {
     const wrap = document.createElement('div');
-    wrap.className = 'min-h-[100dvh] w-full bg-[#0b1220] text-white font-sans p-6';
+    wrap.className = 'min-h-[100dvh] w-full bg-[#0d2032] text-white font-sans p-4 sm:p-6';
 
     wrap.innerHTML = `
         <div class="mx-auto w-full max-w-3xl">
             <div class="flex items-center justify-between">
                 <div>
-                    <div class="text-[10px] font-black tracking-[0.4em] text-indigo-200 uppercase">PIXEL DUEL</div>
-                    <div class="mt-1 text-3xl font-black">規則說明</div>
+                    <div class="text-[10px] font-black tracking-[0.4em] text-[#c48e36] uppercase">PIXEL DUEL</div>
+                    <div class="mt-1 text-3xl font-black text-[#e7c980]">規則說明</div>
                 </div>
-                <button id="backHome" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-[12px] font-black tracking-widest uppercase">返回首頁</button>
+                <button id="backHome" class="px-4 py-2 rounded-none bg-[#16344c] hover:bg-[#1c3a52] border-2 border-[#c48e36] text-[#e7c980] text-[12px] font-black tracking-widest shadow-[3px_3px_0_0_#011c31] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none">返回首頁</button>
             </div>
             ${renderRulesContentHTML()}
         </div>
@@ -1296,12 +1312,12 @@ function renderCardDescHTML(desc: string) {
     const chips = tags.map(t => {
         const passive = t.includes('被動');
         const tone = passive
-            ? 'bg-amber-50 text-amber-700 border-amber-200'
-            : 'bg-indigo-50 text-indigo-700 border-indigo-200';
-        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-black tracking-wider ${tone}">${t}</span>`;
+            ? 'bg-[#d0c954] text-[#2a1c10] border-[#603b2d]'
+            : 'bg-[#7ca1bb] text-[#0d2032] border-[#603b2d]';
+        return `<span class="inline-flex items-center px-1.5 py-0.5 rounded-none border-2 text-[10px] font-black tracking-wider ${tone}">${t}</span>`;
     }).join('');
     return `
-        <div class="text-slate-600 text-[11px] font-bold leading-relaxed">${text}</div>
+        <div class="text-[#2a1c10] text-[12px] font-bold leading-relaxed">${text}</div>
         ${chips ? `<div class="mt-1.5 flex flex-wrap gap-1">${chips}</div>` : ''}
     `;
 }
@@ -1325,18 +1341,18 @@ function renderCardListEntryHTML(def: (typeof CARD_DEFS)[number], extraClass = '
     // 再標一次是重複資訊，而且圖比數字好認。
     const src = getCardPngUrlByImgNo(def.imgNo);
     return `
-        <div class="p-3 bg-white rounded-xl border border-slate-100 shadow-sm flex gap-3 ${extraClass}">
+        <div class="p-3 bg-[#e0c999] rounded-none border-2 border-[#603b2d] shadow-[3px_3px_0_0_rgba(42,28,16,0.25)] flex gap-3 ${extraClass}">
             <img
                 src="${src}"
                 alt="${def.name}"
                 data-effect-id="${def.effectId}"
-                class="card-thumb w-[64px] h-[92px] shrink-0 rounded-lg border border-slate-200 bg-white object-contain select-none cursor-zoom-in"
+                class="card-thumb px-crisp w-[64px] h-[92px] shrink-0 rounded-none border-2 border-[#603b2d] bg-[#efe0bf] object-contain select-none cursor-zoom-in"
                 draggable="false"
                 loading="lazy"
                 decoding="async"
             />
             <div class="min-w-0 flex-1">
-                <div class="text-indigo-600 font-extrabold text-sm">${def.name}</div>
+                <div class="text-[#603b2d] font-black text-[15px] tracking-wide">${def.name}</div>
                 ${renderCardDescHTML(def.desc)}
             </div>
         </div>
@@ -4056,7 +4072,7 @@ function renderMobileTopBar(typeColors) {
     // 頂列：左＝返回首頁、中＝標題、右＝卡牌介紹。
     // 階段與提示都由底部操作列負責，這裡不重複顯示。
     const wrap = document.createElement('div');
-    wrap.className = 'h-12 px-3 border-b border-slate-200 bg-white/90 backdrop-blur flex items-center justify-between shrink-0 relative';
+    wrap.className = 'h-12 px-3 border-b-[3px] border-[#c48e36] bg-[#16344c] flex items-center justify-between shrink-0 relative';
 
     const left = document.createElement('div');
     left.className = 'flex items-center gap-2';
@@ -4065,12 +4081,12 @@ function renderMobileTopBar(typeColors) {
 
     const center = document.createElement('div');
     center.className = 'absolute left-1/2 -translate-x-1/2 pointer-events-none';
-    center.innerHTML = `<div class="text-[15px] font-black text-slate-800 tracking-[0.12em]">像素對決</div>`;
+    center.innerHTML = `<div class="text-[15px] font-black text-[#e7c980] tracking-[0.12em]">像素對決</div>`;
 
     const right = document.createElement('div');
     right.className = 'flex items-center gap-2';
     right.innerHTML = `
-        <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 active:scale-95 shadow-sm border border-slate-200">
+        <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-none bg-[#0d2032] flex items-center justify-center text-[#e7c980] active:translate-x-[2px] active:translate-y-[2px] shadow-[2px_2px_0_0_#011c31] border-2 border-[#c48e36]">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
         </button>
     `;
@@ -4088,19 +4104,19 @@ function renderMobileTopBar(typeColors) {
 function renderMobileActionBar() {
     // 單行三欄：左＝階段 1~7、中＝提示、右＝按鈕。不換行，所以可以壓得很扁。
     const bar = document.createElement('div');
-    bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-white border-t border-slate-200 shadow-[0_-2px_10px_rgba(15,23,42,0.06)]';
+    bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-[#16344c] border-t-[3px] border-[#c48e36]';
 
     let displayPhaseHint = getActionBlockReason() || phaseHint;
     if (luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
     if (illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
 
     const step = document.createElement('div');
-    step.className = 'shrink-0 px-2 py-1 rounded-lg bg-indigo-50 border border-indigo-100 text-[11px] font-black text-indigo-600 tracking-wider whitespace-nowrap';
+    step.className = 'shrink-0 px-2 py-1 rounded-none bg-[#0d2032] border-2 border-[#c48e36] text-[11px] font-black text-[#e7c980] tracking-wider whitespace-nowrap';
     step.innerText = inPreparationPhase ? '準備階段' : PHASE_NAMES[currentPhaseIndex];
     bar.appendChild(step);
 
     const hint = document.createElement('div');
-    hint.className = 'flex-1 min-w-0 text-center text-[12px] font-black text-slate-600 whitespace-nowrap overflow-hidden text-ellipsis';
+    hint.className = 'flex-1 min-w-0 text-center text-[12px] font-black text-white/85 whitespace-nowrap overflow-hidden text-ellipsis';
     hint.innerText = displayPhaseHint || '';
     bar.appendChild(hint);
 
@@ -4118,13 +4134,13 @@ function buildMobileActionControls() {
         // 否則只剩「回首頁再重選一次模式」這條路。
         if (winner && winModalDismissed) {
             const again = document.createElement('button');
-            again.className = 'bg-indigo-600 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+            again.className = 'bg-[#c48e36] text-[#0d2032] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#e7c980] active:translate-x-[2px] active:translate-y-[2px]';
             again.innerText = '再來一場';
             again.onclick = () => restartMatch();
             right.appendChild(again);
 
             const btn = document.createElement('button');
-            btn.className = 'bg-slate-900 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+            btn.className = 'bg-[#0d2032] text-[#e7c980] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#c48e36] active:translate-x-[2px] active:translate-y-[2px]';
             btn.innerText = '回到首頁';
             btn.onclick = () => goHome();
             right.appendChild(btn);
@@ -4135,7 +4151,7 @@ function buildMobileActionControls() {
         if (inPreparationPhase) {
             const btn = document.createElement('button');
             const prepDone = players[1].cardsPlayedThisTurn >= 1;
-            btn.className = `px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${prepDone ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-300'}`;
+            btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${prepDone ? 'bg-[#c48e36] text-[#0d2032] border-[#e7c980] shadow-[2px_2px_0_0_#011c31]' : 'bg-[#0d2032]/40 text-[#e7c980]/35 border-[#c48e36]/30'}`;
             btn.innerText = '開始';
             if (prepDone) {
                 btn.onclick = () => {
@@ -4171,7 +4187,7 @@ function buildMobileActionControls() {
             });
         } else if (fateSelectionMode) {
             const btn = document.createElement('button');
-            btn.className = 'bg-amber-600 text-white px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-wider active:scale-95';
+            btn.className = 'bg-[#d0c954] text-[#2a1c10] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#603b2d] active:translate-x-[2px] active:translate-y-[2px]';
             btn.innerText = `重擲(${fateSelectedDiceIndices.length})`;
             btn.onclick = confirmFate;
             right.appendChild(btn);
@@ -4179,7 +4195,7 @@ function buildMobileActionControls() {
             const btn = document.createElement('button');
             const isActionBlocked = getActionBlockReason() !== null;
             const label = currentPhaseIndex === 6 ? '結束' : currentPhaseIndex === 4 ? '結算' : '繼續';
-            btn.className = `px-3 py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${isActionBlocked ? 'bg-slate-100 text-slate-300' : 'bg-indigo-600 text-white active:scale-95'}`;
+            btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${isActionBlocked ? 'bg-[#0d2032]/40 text-[#e7c980]/35 border-[#c48e36]/30' : 'bg-[#c48e36] text-[#0d2032] border-[#e7c980] shadow-[2px_2px_0_0_#011c31] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none'}`;
             btn.innerText = label;
             if (!isActionBlocked) btn.onclick = nextPhase;
             right.appendChild(btn);
@@ -4290,21 +4306,21 @@ function renderMobilePlayerBlock(
     // The current player's block grows to fill the leftover height so the board
     // never leaves a dead gap above the hand dock; the opponent strip stays compact.
     const growth = position === 'bottom' ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0';
-    wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-rose-100/100' : 'bg-blue-100/100'} ${growth}`;
+    wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-[#f2cdc9]' : 'bg-[#ccdde8]'} ${growth}`;
 
     // compact header
     const header = document.createElement('div');
     header.className = 'flex items-center justify-between';
     header.innerHTML = `
         <div class="flex items-end gap-2">
-            <div class="text-2xl font-black ${isCurrent ? 'text-indigo-600' : 'text-slate-400'} tracking-tight">${p.hp}</div>
-            <div class="text-[10px] font-black text-slate-500 tracking-widest">${p.name}${isCurrent ? '（回合）' : ''}</div>
+            <div class="text-2xl font-black ${isCurrent ? 'text-[#603b2d]' : 'text-[#603b2d]/45'} tracking-tight">${p.hp}</div>
+            <div class="text-[10px] font-black text-[#2a1c10]/70 tracking-widest">${p.name}${isCurrent ? '（回合）' : ''}</div>
         </div>
         ${position === 'bottom' ? `
             <div class="flex items-center gap-2">
-                <div class="flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-[10px] font-black text-emerald-700">魔 ${p.magic}</div>
-                <div class="flex items-center gap-1 px-2 py-1 rounded-full bg-blue-50 border border-blue-100 text-[10px] font-black text-blue-700">防 ${p.defense}</div>
-                <div class="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-50 border border-amber-100 text-[10px] font-black text-amber-700">金 ${p.gold}</div>
+                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#a5cd5d] border-2 border-[#603b2d] text-[11px] font-black text-[#2a1c10]">魔 ${p.magic}</div>
+                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#7ca1bb] border-2 border-[#603b2d] text-[11px] font-black text-[#2a1c10]">防 ${p.defense}</div>
+                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#d0c954] border-2 border-[#603b2d] text-[11px] font-black text-[#2a1c10]">金 ${p.gold}</div>
             </div>
         ` : ''}
     `;
@@ -4313,7 +4329,7 @@ function renderMobilePlayerBlock(
     // Top（對手）：提供「展開/收合」按鈕
     if (position === 'top' && !isCurrent) {
         const btn = document.createElement('button');
-        btn.className = 'px-2 py-1 rounded-full border border-slate-200 bg-white text-slate-600 text-[10px] font-black tracking-widest active:scale-95';
+        btn.className = 'px-2 py-1 rounded-none border-2 border-[#603b2d] bg-[#e0c999] text-[#2a1c10] text-[10px] font-black tracking-widest active:translate-x-[1px] active:translate-y-[1px]';
         btn.innerText = mobileOpponentBoardOpen ? '場地▼' : '場地▲';
         btn.onclick = (e) => {
             e.stopPropagation();
@@ -4337,7 +4353,7 @@ function renderMobilePlayerBlock(
         [0, 1, 2].forEach((aIdx) => {
             const col = document.createElement('div');
             // 移除「區域1~3」文字，整體更扁
-            col.className = 'flex-1 min-w-[90px] rounded-lg border border-slate-100 bg-white/70 px-1.5 py-1';
+            col.className = 'flex-1 min-w-[90px] rounded-none border-2 border-[#603b2d]/40 bg-[#efe0bf]/70 px-1.5 py-1';
 
             const badges = document.createElement('div');
             badges.className = 'flex flex-wrap items-center justify-center gap-1';
@@ -4411,7 +4427,7 @@ function renderMobilePlayerBlock(
             const zone = document.createElement('div');
             // No `h-full`: an explicit height would make the cross size non-auto
             // and switch OFF the parent's `items-stretch`.
-            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-2xl transition-all border border-transparent ${position === 'bottom' ? 'min-h-0' : ''} ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
+            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-none transition-all border-2 border-transparent ${position === 'bottom' ? 'min-h-0' : ''} ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
 
             zone.innerHTML = `
                 <div class="w-full flex items-center justify-center pt-2 pb-0">
@@ -4427,7 +4443,7 @@ function renderMobilePlayerBlock(
             // shrink when the dock leaves less room (flex-shrink is on by default,
             // and the stacked cards are absolutely positioned so nothing blocks it).
             const slotSize = position === 'bottom' ? 'h-[200px] min-h-[110px]' : 'h-[200px]';
-            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-[3px] border-dashed border-[#603b2d]/45 bg-[#efe0bf]/60 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             // 拖曳出牌的放置目標（不需要先選牌，所以條件比點擊版寬鬆）
             if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
@@ -4672,7 +4688,7 @@ function renderMobileHandDrawer(typeColors) {
 
     // Header：只保留「切換」作為標題（同一行）
     const header = document.createElement('div');
-    header.className = 'w-full bg-slate-900 text-white px-3 py-2 flex items-center justify-between border-t border-slate-800';
+    header.className = 'w-full bg-[#0d2032] text-[#e7c980] px-3 py-2 flex items-center justify-between border-t-[3px] border-[#c48e36]';
     // 點 header 空白可收合/展開；按鈕會 stopPropagation
     header.onclick = toggleHandDrawer;
 
@@ -4681,7 +4697,7 @@ function renderMobileHandDrawer(typeColors) {
     const tabBtn = (id: 'market' | 'hand', label: string) => {
         const b = document.createElement('button');
         const active = mobileDockTab === id;
-        b.className = `px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase border ${active ? 'bg-white text-slate-900 border-white' : 'bg-slate-900 text-slate-200 border-slate-700'}`;
+        b.className = `px-3 py-1 rounded-none text-[10px] font-black tracking-widest uppercase border-2 ${active ? 'bg-[#c48e36] text-[#0d2032] border-[#e7c980]' : 'bg-[#16344c] text-[#e7c980]/70 border-[#c48e36]/50'}`;
         b.innerText = label;
         b.onclick = (e) => {
             e.stopPropagation();
@@ -4693,7 +4709,7 @@ function renderMobileHandDrawer(typeColors) {
     tabs.appendChild(tabBtn('hand', 'HAND'));
 
     const arrow = document.createElement('button');
-    arrow.className = 'text-[12px] font-black tracking-widest uppercase text-slate-200 px-2';
+    arrow.className = 'text-[12px] font-black tracking-widest uppercase text-[#e7c980] px-2';
     arrow.innerText = handDrawerOpen ? '▼' : '▲';
     arrow.onclick = (e) => {
         e.stopPropagation();
@@ -4716,9 +4732,9 @@ function renderMobileHandDrawer(typeColors) {
         // 任意階段皆可瀏覽市場（但只有購買階段能真的買）
         const isMarketDock = mobileDockTab === 'market';
         body.className = isMarketDock
-            ? `bg-white border-t border-slate-200 p-0 ${dockBodyBase}`
+            ? `bg-[#efe0bf] border-t-[3px] border-[#603b2d] p-0 ${dockBodyBase}`
             // Hand dock uses flex to vertically center the scrolling row.
-            : `bg-white border-t border-slate-200 px-3 ${dockBodyBase} flex items-center`;
+            : `bg-[#efe0bf] border-t-[3px] border-[#603b2d] px-3 ${dockBodyBase} flex items-center`;
 
         // Dock: show market / hand by tab
         if (isMarketDock) {
@@ -4768,7 +4784,7 @@ function renderMobileLayout(typeColors) {
     const container = document.createElement('div');
     // 100dvh (not 100vh): mobile browser toolbars shrink the visible viewport,
     // and 100vh would overflow it and cause a whole-page scroll.
-    container.className = 'h-[100dvh] w-full bg-[#f8fafc] text-[#0f172a] font-sans overflow-hidden flex flex-col';
+    container.className = 'h-[100dvh] w-full bg-[#efe0bf] text-[#2a1c10] font-sans overflow-hidden flex flex-col';
 
     container.appendChild(renderMobileTopBar(typeColors));
 
@@ -4855,14 +4871,14 @@ function render() {
             overlay.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4';
             overlay.onclick = () => { showEffectList = false; render(); };
             const modal = document.createElement('div');
-            modal.className = 'bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[80vh]';
+            modal.className = 'px-panel w-full max-w-sm overflow-hidden flex flex-col max-h-[80dvh]';
             modal.onclick = (e) => e.stopPropagation();
             modal.innerHTML = `
-                <div class="px-4 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div class="px-4 py-3 border-b-[3px] border-[#603b2d] flex justify-between items-center bg-[#e0c999]">
                     <h3 class="font-black text-slate-800 tracking-tight">卡牌一覽</h3>
-                    <button id="closeModal" class="text-slate-400 hover:text-slate-600 transition-colors p-1">×</button>
+                    <button id="closeModal" aria-label="關閉" class="w-8 h-8 flex items-center justify-center bg-[#16344c] text-[#e7c980] border-2 border-[#c48e36] font-black active:translate-x-[2px] active:translate-y-[2px]">×</button>
                 </div>
-                <div class="overflow-y-auto p-3 flex flex-col gap-2 bg-slate-50/30">
+                <div class="overflow-y-auto p-3 flex flex-col gap-2 bg-[#efe0bf]">
                     ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => renderCardListEntryHTML(def)).join('')}
                 </div>
             `;
@@ -4883,7 +4899,7 @@ function render() {
     }
 
     const container = document.createElement('div');
-    container.className = 'h-[100dvh] w-full bg-[#f8fafc] text-[#0f172a] font-sans overflow-hidden flex';
+    container.className = 'h-[100dvh] w-full bg-[#efe0bf] text-[#2a1c10] font-sans overflow-hidden flex';
 
     // Left: main game
     const left = document.createElement('div');
@@ -4906,7 +4922,7 @@ function render() {
     leftSection.innerHTML = `
         <div class="font-extrabold text-lg tracking-tight hidden md:block italic">PIXEL DUEL</div>
         <div class="h-8 w-[1px] bg-slate-100 hidden md:block"></div>
-        <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200">
+        <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-none bg-[#0d2032] flex items-center justify-center text-[#e7c980] hover:bg-[#1c3a52] active:translate-x-[2px] active:translate-y-[2px] shadow-[2px_2px_0_0_#011c31] border-2 border-[#c48e36]">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
         </button>
     `;
@@ -5024,7 +5040,7 @@ function render() {
         const btn = document.createElement('button');
         const isActionBlocked = getActionBlockReason() !== null;
         const label = currentPhaseIndex === 6 ? '結束回合' : currentPhaseIndex === 4 ? '結算傷害' : '繼續';
-        btn.className = `px-6 py-2 rounded-lg font-black text-xs uppercase tracking-widest transition-all ${isActionBlocked ? 'bg-slate-100 text-slate-300 cursor-not-allowed' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-500 active:scale-95'}`;
+        btn.className = `px-6 py-2 rounded-none font-black text-xs tracking-widest border-2 ${isActionBlocked ? 'bg-[#cbbfa6] text-[#8a7d66] border-[#8a7d66] cursor-not-allowed' : 'bg-[#c48e36] text-[#0d2032] border-[#603b2d] shadow-[3px_3px_0_0_rgba(42,28,16,0.4)] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none'}`;
         btn.innerHTML = `${label} &rarr;`;
         if (!isActionBlocked) btn.onclick = nextPhase;
         actionContainer.appendChild(btn);
@@ -5064,24 +5080,24 @@ function render() {
         overlay.onclick = () => { showEffectList = false; render(); };
         
         const modal = document.createElement('div');
-        modal.className = 'bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[80vh] animate-in fade-in zoom-in duration-200';
+        modal.className = 'px-panel w-full max-w-sm overflow-hidden flex flex-col max-h-[80dvh]';
         modal.onclick = (e) => e.stopPropagation();
         
         modal.innerHTML = `
-            <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                <h3 class="font-black text-slate-800 tracking-tight flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
+            <div class="px-5 py-3 border-b-[3px] border-[#603b2d] flex justify-between items-center bg-[#e0c999]">
+                <h3 class="font-black text-[#2a1c10] tracking-tight flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 bg-[#c48e36] border-2 border-[#603b2d]"></span>
                     卡牌一覽
                 </h3>
-                <button id="closeModal" class="text-slate-400 hover:text-slate-600 transition-colors p-1">
+                <button id="closeModal" aria-label="關閉" class="w-8 h-8 flex items-center justify-center bg-[#16344c] text-[#e7c980] border-2 border-[#c48e36] active:translate-x-[2px] active:translate-y-[2px]">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>
-            <div class="overflow-y-auto p-4 flex flex-col gap-2 bg-slate-50/30">
+            <div class="overflow-y-auto p-4 flex flex-col gap-2 bg-[#efe0bf]">
                 ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => renderCardListEntryHTML(def, 'hover:border-indigo-100 transition-colors')).join('')}
             </div>
-            <div class="p-4 bg-slate-50 border-t border-slate-100 text-center">
-                <button id="closeModalBtn" class="w-full bg-slate-900 text-white py-2 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-800 transition-all active:scale-95">關閉列表 Close</button>
+            <div class="p-3 bg-[#e0c999] border-t-[3px] border-[#603b2d] text-center">
+                <button id="closeModalBtn" class="w-full bg-[#16344c] text-[#e7c980] py-2.5 rounded-none font-black text-xs tracking-widest border-2 border-[#c48e36] active:translate-x-[2px] active:translate-y-[2px]">關閉列表 Close</button>
             </div>
         `;
         
@@ -5108,7 +5124,7 @@ function renderPlayerArea(idx: 0 | 1) {
     // Horizontal structure: [Stats & Queue] [Board] [Hand]
     // 右側手牌欄加寬一點（但不改中間場地三區本來的排版邏輯）
     // Player background: 先手(玩家0)=淡紅、後手(玩家1)=淡藍
-    area.className = `px-8 py-4 grid grid-cols-[200px_1fr_300px] gap-6 ${idx === 0 ? 'bg-rose-50/75' : 'bg-sky-50/75'} relative transition-all duration-300 overflow-hidden`;
+    area.className = `px-8 py-4 grid grid-cols-[200px_1fr_300px] gap-6 ${idx === 0 ? 'bg-[#f2cdc9]' : 'bg-[#ccdde8]'} relative transition-all duration-300 overflow-hidden`;
     
     // 1. Column: Stats & Next Turn Preview
     const leftCol = document.createElement('div');
@@ -5175,7 +5191,7 @@ function renderPlayerArea(idx: 0 | 1) {
 
     [0, 1, 2].forEach(aIdx => {
         const zone = document.createElement('div');
-        zone.className = `relative flex flex-col items-center gap-1 p-3 rounded-2xl transition-all border border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-indigo-50/50 border-indigo-100 shadow-sm' : 'bg-slate-50/30'}`;
+        zone.className = `relative flex flex-col items-center gap-1 p-3 rounded-none transition-all border-2 border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
         
         zone.innerHTML = `
             <div class="w-full flex items-center justify-center pt-2 pb-5">
