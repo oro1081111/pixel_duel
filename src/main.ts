@@ -974,9 +974,9 @@ function renderHomeMenuButtonHTML(
     return `
         <button id="${id}" class="group relative block w-full text-left bg-[#16344c] hover:bg-[#1c3a52] border-[3px] border-[#c48e36] rounded-none px-4 py-3 shadow-[4px_4px_0_0_#011c31] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none ${extraClass}">
             <span class="absolute left-0 top-0 bottom-0 w-[7px]" style="background:${accent}"></span>
-            <div class="pl-3">
-                <div class="text-[22px] leading-none font-black tracking-[0.06em] text-[#e7c980]">${title}</div>
-                <div class="mt-1.5 text-[13px] font-black leading-tight text-white/85">${subtitle}</div>
+            <div class="pl-3 flex items-baseline gap-3 whitespace-nowrap">
+                <span class="text-[22px] leading-none font-black tracking-[0.06em] text-[#e7c980] shrink-0">${title}</span>
+                <span class="text-[13px] font-black leading-none text-white/85 truncate">${subtitle}</span>
             </div>
         </button>
     `;
@@ -992,7 +992,7 @@ function renderHomeScreen() {
                 <img
                     src="${COVER_IMG_URL}"
                     alt="像素對決 PIXEL DUEL 封面"
-                    class="card-thumb w-auto max-w-[300px] max-h-[28dvh] sm:max-w-[340px] sm:max-h-none rounded-none border-[3px] border-[#c48e36] shadow-[6px_6px_0_0_#011c31] select-none"
+                    class="card-thumb w-auto max-w-[340px] max-h-[40dvh] sm:max-w-[400px] sm:max-h-none select-none"
                     draggable="false"
                     loading="eager"
                     decoding="async"
