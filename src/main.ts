@@ -1303,6 +1303,28 @@ function renderCardDescHTML(desc: string) {
     `;
 }
 
+function renderCardListEntryHTML(def: (typeof CARD_DEFS)[number], extraClass = '') {
+    // 卡牌一覽用實際卡圖取代左右屬性圓點 —— 卡圖上本來就印著屬性，
+    // 再標一次是重複資訊，而且圖比數字好認。
+    const src = getCardPngUrlByImgNo(def.imgNo);
+    return `
+        <div class="p-3 bg-white rounded-xl border border-slate-100 shadow-sm flex gap-3 ${extraClass}">
+            <img
+                src="${src}"
+                alt="${def.name}"
+                class="w-[64px] h-[92px] shrink-0 rounded-lg border border-slate-200 bg-white object-contain select-none"
+                draggable="false"
+                loading="lazy"
+                decoding="async"
+            />
+            <div class="min-w-0 flex-1">
+                <div class="text-indigo-600 font-extrabold text-sm">${def.name}</div>
+                ${renderCardDescHTML(def.desc)}
+            </div>
+        </div>
+    `;
+}
+
 function toggleEffectList() {
     showEffectList = !showEffectList;
     render();
@@ -4823,18 +4845,7 @@ function render() {
                     <button id="closeModal" class="text-slate-400 hover:text-slate-600 transition-colors p-1">×</button>
                 </div>
                 <div class="overflow-y-auto p-3 flex flex-col gap-2 bg-slate-50/30">
-                    ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => `
-                        <div class="p-3 bg-white rounded-xl border border-slate-100 shadow-sm">
-                            <div class="flex items-center justify-between gap-2 mb-0.5">
-                                <div class="text-indigo-600 font-extrabold text-sm">${def.name}</div>
-                                <div class="flex items-center gap-1.5 shrink-0">
-                                    <span class="card-frame-chip ${typeColors[def.left.type]}" style="--chip: 16px; --chip-font: 8px;">${def.left.value}</span>
-                                    <span class="card-frame-chip ${typeColors[def.right.type]}" style="--chip: 16px; --chip-font: 8px;">${def.right.value}</span>
-                                </div>
-                            </div>
-                            ${renderCardDescHTML(def.desc)}
-                        </div>
-                    `).join('')}
+                    ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => renderCardListEntryHTML(def)).join('')}
                 </div>
             `;
             (modal.querySelector('#closeModal') as HTMLElement).onclick = toggleEffectList;
@@ -4876,7 +4887,7 @@ function render() {
     leftSection.innerHTML = `
         <div class="font-extrabold text-lg tracking-tight hidden md:block italic">PIXEL DUEL</div>
         <div class="h-8 w-[1px] bg-slate-100 hidden md:block"></div>
-        <button id="infoBtn" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200">
+        <button id="infoBtn" aria-label="卡牌介紹" title="卡牌介紹" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-indigo-600 transition-all active:scale-95 shadow-sm border border-slate-200">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
         </button>
     `;
@@ -5048,18 +5059,7 @@ function render() {
                 </button>
             </div>
             <div class="overflow-y-auto p-4 flex flex-col gap-2 bg-slate-50/30">
-                ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => `
-                    <div class="p-3 bg-white rounded-xl border border-slate-100 shadow-sm hover:border-indigo-100 transition-colors">
-                        <div class="flex items-center justify-between gap-2 mb-0.5">
-                            <div class="text-indigo-600 font-extrabold text-sm">${def.name}</div>
-                            <div class="flex items-center gap-1.5 shrink-0">
-                                <span class="card-frame-chip ${typeColors[def.left.type]}" style="--chip: 16px; --chip-font: 8px;">${def.left.value}</span>
-                                <span class="card-frame-chip ${typeColors[def.right.type]}" style="--chip: 16px; --chip-font: 8px;">${def.right.value}</span>
-                            </div>
-                        </div>
-                        ${renderCardDescHTML(def.desc)}
-                    </div>
-                `).join('')}
+                ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => renderCardListEntryHTML(def, 'hover:border-indigo-100 transition-colors')).join('')}
             </div>
             <div class="p-4 bg-slate-50 border-t border-slate-100 text-center">
                 <button id="closeModalBtn" class="w-full bg-slate-900 text-white py-2 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-800 transition-all active:scale-95">關閉列表 Close</button>
