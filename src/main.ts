@@ -1303,6 +1303,20 @@ function renderCardDescHTML(desc: string) {
     `;
 }
 
+// 卡牌一覽的縮圖也要能長按放大。清單是用 innerHTML 一次組出來的，
+// 事件得在掛進 DOM 之後才補綁。
+function attachCardListPreviews(root: HTMLElement) {
+    root.querySelectorAll('img[data-effect-id]').forEach(el => {
+        const effectId = el.getAttribute('data-effect-id') || '';
+        const def = CARD_DEFS.find(d => d.effectId === effectId);
+        attachCardTooltip(el as HTMLElement, {effectId, alt: def?.name || ''});
+    });
+    // 捲動清單時收掉預覽，免得浮層黏在原地
+    root.querySelectorAll('.overflow-y-auto').forEach(sc => {
+        sc.addEventListener('scroll', hideGlobalTooltip);
+    });
+}
+
 function renderCardListEntryHTML(def: (typeof CARD_DEFS)[number], extraClass = '') {
     // 卡牌一覽用實際卡圖取代左右屬性圓點 —— 卡圖上本來就印著屬性，
     // 再標一次是重複資訊，而且圖比數字好認。
@@ -1312,7 +1326,8 @@ function renderCardListEntryHTML(def: (typeof CARD_DEFS)[number], extraClass = '
             <img
                 src="${src}"
                 alt="${def.name}"
-                class="w-[64px] h-[92px] shrink-0 rounded-lg border border-slate-200 bg-white object-contain select-none"
+                data-effect-id="${def.effectId}"
+                class="card-thumb w-[64px] h-[92px] shrink-0 rounded-lg border border-slate-200 bg-white object-contain select-none cursor-zoom-in"
                 draggable="false"
                 loading="lazy"
                 decoding="async"
@@ -4848,6 +4863,7 @@ function render() {
                     ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => renderCardListEntryHTML(def)).join('')}
                 </div>
             `;
+            attachCardListPreviews(modal);
             (modal.querySelector('#closeModal') as HTMLElement).onclick = toggleEffectList;
             overlay.appendChild(modal);
             root.appendChild(overlay);
@@ -5066,6 +5082,7 @@ function render() {
             </div>
         `;
         
+        attachCardListPreviews(modal);
         (modal.querySelector('#closeModal') as HTMLElement).onclick = toggleEffectList;
         (modal.querySelector('#closeModalBtn') as HTMLElement).onclick = toggleEffectList;
         overlay.appendChild(modal);
