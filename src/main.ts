@@ -878,11 +878,11 @@ function renderLeaveConfirmOverlay() {
     modal.innerHTML = `
         <div class="px-5 pt-5 pb-4 text-center">
             <div class="text-[10px] font-black text-[#603b2d]/70 uppercase tracking-[0.3em]">確認</div>
-            <div class="mt-2 text-lg font-black text-[#2a1c10]">${isRestart ? '要重新開始嗎？' : '要離開這場對局嗎？'}</div>
+            <div class="mt-2 text-lg font-black text-[#2a2420]">${isRestart ? '要重新開始嗎？' : '要離開這場對局嗎？'}</div>
             <div class="mt-2 text-[12px] font-bold text-[#603b2d] leading-relaxed">對局還沒結束，${isRestart ? '重開' : '離開'}後目前的進度會消失。</div>
         </div>
-        <div class="p-3 bg-[#e0c999] border-t-[3px] border-[#603b2d] grid grid-cols-2 gap-2">
-            <button id="leaveCancel" class="py-2.5 rounded-none bg-[#efe0bf] border-2 border-[#603b2d] text-[#2a1c10] font-black text-xs tracking-widest active:translate-x-[2px] active:translate-y-[2px]">繼續遊戲</button>
+        <div class="p-3 bg-[#dcdad3] border-t-[3px] border-[#603b2d] grid grid-cols-2 gap-2">
+            <button id="leaveCancel" class="py-2.5 rounded-none bg-[#f4f3f0] border-2 border-[#603b2d] text-[#2a2420] font-black text-xs tracking-widest active:translate-x-[2px] active:translate-y-[2px]">繼續遊戲</button>
             <button id="leaveConfirm" class="py-2.5 rounded-none bg-[#16344c] text-[#e7c980] border-2 border-[#c48e36] font-black text-xs tracking-widest active:translate-x-[2px] active:translate-y-[2px]">${isRestart ? '重新開始' : '離開'}</button>
         </div>
     `;
@@ -1039,11 +1039,11 @@ function renderRulesContentHTML() {
                 class="mt-4 flex items-center justify-between gap-3 bg-[#c48e36] hover:bg-[#d0a04a] border-[3px] border-[#603b2d] px-5 py-3.5 shadow-[4px_4px_0_0_#011c31] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none"
             >
                 <div>
-                    <div class="text-[9px] font-black tracking-[0.3em] text-[#2a1c10]/70 uppercase">PDF</div>
-                    <div class="mt-0.5 text-lg font-black text-[#2a1c10]">實體桌遊說明書</div>
-                    <div class="mt-0.5 text-[11px] font-bold text-[#2a1c10]/75">開啟完整規則書（另開新分頁）</div>
+                    <div class="text-[9px] font-black tracking-[0.3em] text-[#2a2420]/70 uppercase">PDF</div>
+                    <div class="mt-0.5 text-lg font-black text-[#2a2420]">實體桌遊說明書</div>
+                    <div class="mt-0.5 text-[11px] font-bold text-[#2a2420]/75">開啟完整規則書（另開新分頁）</div>
                 </div>
-                <div class="text-2xl text-[#2a1c10] shrink-0" aria-hidden="true">↗</div>
+                <div class="text-2xl text-[#2a2420] shrink-0" aria-hidden="true">↗</div>
             </a>
 
             <div class="mt-4 space-y-3 text-white/85">
@@ -1053,7 +1053,7 @@ function renderRulesContentHTML() {
                         <img
                             src="${TURN_FLOW_IMG_URL}"
                             alt="回合流程：出牌 擲骰 判定 防禦 傷害 攻擊 購買"
-                            class="px-crisp card-thumb w-auto max-w-[300px] sm:max-w-[340px] select-none"
+                            class="px-crisp card-thumb w-auto max-w-[200px] sm:max-w-[240px] select-none"
                             draggable="false"
                             loading="lazy"
                             decoding="async"
@@ -1312,12 +1312,12 @@ function renderCardDescHTML(desc: string) {
     const chips = tags.map(t => {
         const passive = t.includes('被動');
         const tone = passive
-            ? 'bg-[#d0c954] text-[#2a1c10] border-[#603b2d]'
+            ? 'bg-[#d0c954] text-[#2a2420] border-[#603b2d]'
             : 'bg-[#7ca1bb] text-[#0d2032] border-[#603b2d]';
         return `<span class="inline-flex items-center px-1.5 py-0.5 rounded-none border-2 text-[10px] font-black tracking-wider ${tone}">${t}</span>`;
     }).join('');
     return `
-        <div class="text-[#2a1c10] text-[12px] font-bold leading-relaxed">${text}</div>
+        <div class="text-[#2a2420] text-[12px] font-bold leading-relaxed">${text}</div>
         ${chips ? `<div class="mt-1.5 flex flex-wrap gap-1">${chips}</div>` : ''}
     `;
 }
@@ -1341,12 +1341,12 @@ function renderCardListEntryHTML(def: (typeof CARD_DEFS)[number], extraClass = '
     // 再標一次是重複資訊，而且圖比數字好認。
     const src = getCardPngUrlByImgNo(def.imgNo);
     return `
-        <div class="p-3 bg-[#e0c999] rounded-none border-2 border-[#603b2d] shadow-[3px_3px_0_0_rgba(42,28,16,0.25)] flex gap-3 ${extraClass}">
+        <div class="p-3 bg-[#f4f3f0] rounded-none border-2 border-[#603b2d] shadow-[3px_3px_0_0_rgba(42,28,16,0.25)] flex gap-3 ${extraClass}">
             <img
                 src="${src}"
                 alt="${def.name}"
                 data-effect-id="${def.effectId}"
-                class="card-thumb px-crisp w-[64px] h-[92px] shrink-0 rounded-none border-2 border-[#603b2d] bg-[#efe0bf] object-contain select-none cursor-zoom-in"
+                class="card-thumb px-crisp w-[64px] h-[92px] shrink-0 rounded-none border-2 border-[#603b2d] bg-white object-contain select-none cursor-zoom-in"
                 draggable="false"
                 loading="lazy"
                 decoding="async"
@@ -4187,7 +4187,7 @@ function buildMobileActionControls() {
             });
         } else if (fateSelectionMode) {
             const btn = document.createElement('button');
-            btn.className = 'bg-[#d0c954] text-[#2a1c10] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#603b2d] active:translate-x-[2px] active:translate-y-[2px]';
+            btn.className = 'bg-[#d0c954] text-[#2a2420] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#603b2d] active:translate-x-[2px] active:translate-y-[2px]';
             btn.innerText = `重擲(${fateSelectedDiceIndices.length})`;
             btn.onclick = confirmFate;
             right.appendChild(btn);
@@ -4314,13 +4314,13 @@ function renderMobilePlayerBlock(
     header.innerHTML = `
         <div class="flex items-end gap-2">
             <div class="text-2xl font-black ${isCurrent ? 'text-[#603b2d]' : 'text-[#603b2d]/45'} tracking-tight">${p.hp}</div>
-            <div class="text-[10px] font-black text-[#2a1c10]/70 tracking-widest">${p.name}${isCurrent ? '（回合）' : ''}</div>
+            <div class="text-[10px] font-black text-[#2a2420]/70 tracking-widest">${p.name}${isCurrent ? '（回合）' : ''}</div>
         </div>
         ${position === 'bottom' ? `
             <div class="flex items-center gap-2">
-                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#a5cd5d] border-2 border-[#603b2d] text-[11px] font-black text-[#2a1c10]">魔 ${p.magic}</div>
-                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#7ca1bb] border-2 border-[#603b2d] text-[11px] font-black text-[#2a1c10]">防 ${p.defense}</div>
-                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#d0c954] border-2 border-[#603b2d] text-[11px] font-black text-[#2a1c10]">金 ${p.gold}</div>
+                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#a5cd5d] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420]">魔 ${p.magic}</div>
+                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#7ca1bb] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420]">防 ${p.defense}</div>
+                <div class="flex items-center gap-1 px-2 py-0.5 rounded-none bg-[#d0c954] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420]">金 ${p.gold}</div>
             </div>
         ` : ''}
     `;
@@ -4329,7 +4329,7 @@ function renderMobilePlayerBlock(
     // Top（對手）：提供「展開/收合」按鈕
     if (position === 'top' && !isCurrent) {
         const btn = document.createElement('button');
-        btn.className = 'px-2 py-1 rounded-none border-2 border-[#603b2d] bg-[#e0c999] text-[#2a1c10] text-[10px] font-black tracking-widest active:translate-x-[1px] active:translate-y-[1px]';
+        btn.className = 'px-2 py-1 rounded-none border-2 border-[#603b2d] bg-[#dcdad3] text-[#2a2420] text-[10px] font-black tracking-widest active:translate-x-[1px] active:translate-y-[1px]';
         btn.innerText = mobileOpponentBoardOpen ? '場地▼' : '場地▲';
         btn.onclick = (e) => {
             e.stopPropagation();
@@ -4353,7 +4353,7 @@ function renderMobilePlayerBlock(
         [0, 1, 2].forEach((aIdx) => {
             const col = document.createElement('div');
             // 移除「區域1~3」文字，整體更扁
-            col.className = 'flex-1 min-w-[90px] rounded-none border-2 border-[#603b2d]/40 bg-[#efe0bf]/70 px-1.5 py-1';
+            col.className = 'flex-1 min-w-[90px] rounded-none border-2 border-[#603b2d]/40 bg-white/70 px-1.5 py-1';
 
             const badges = document.createElement('div');
             badges.className = 'flex flex-wrap items-center justify-center gap-1';
@@ -4443,7 +4443,7 @@ function renderMobilePlayerBlock(
             // shrink when the dock leaves less room (flex-shrink is on by default,
             // and the stacked cards are absolutely positioned so nothing blocks it).
             const slotSize = position === 'bottom' ? 'h-[200px] min-h-[110px]' : 'h-[200px]';
-            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-[3px] border-dashed border-[#603b2d]/45 bg-[#efe0bf]/60 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             // 拖曳出牌的放置目標（不需要先選牌，所以條件比點擊版寬鬆）
             if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
@@ -4732,9 +4732,9 @@ function renderMobileHandDrawer(typeColors) {
         // 任意階段皆可瀏覽市場（但只有購買階段能真的買）
         const isMarketDock = mobileDockTab === 'market';
         body.className = isMarketDock
-            ? `bg-[#efe0bf] border-t-[3px] border-[#603b2d] p-0 ${dockBodyBase}`
+            ? `bg-[#eceae5] border-t-[3px] border-[#603b2d] p-0 ${dockBodyBase}`
             // Hand dock uses flex to vertically center the scrolling row.
-            : `bg-[#efe0bf] border-t-[3px] border-[#603b2d] px-3 ${dockBodyBase} flex items-center`;
+            : `bg-[#eceae5] border-t-[3px] border-[#603b2d] px-3 ${dockBodyBase} flex items-center`;
 
         // Dock: show market / hand by tab
         if (isMarketDock) {
@@ -4784,7 +4784,7 @@ function renderMobileLayout(typeColors) {
     const container = document.createElement('div');
     // 100dvh (not 100vh): mobile browser toolbars shrink the visible viewport,
     // and 100vh would overflow it and cause a whole-page scroll.
-    container.className = 'h-[100dvh] w-full bg-[#efe0bf] text-[#2a1c10] font-sans overflow-hidden flex flex-col';
+    container.className = 'h-[100dvh] w-full bg-[#eceae5] text-[#2a2420] font-sans overflow-hidden flex flex-col';
 
     container.appendChild(renderMobileTopBar(typeColors));
 
@@ -4874,11 +4874,11 @@ function render() {
             modal.className = 'px-panel w-full max-w-sm overflow-hidden flex flex-col max-h-[80dvh]';
             modal.onclick = (e) => e.stopPropagation();
             modal.innerHTML = `
-                <div class="px-4 py-3 border-b-[3px] border-[#603b2d] flex justify-between items-center bg-[#e0c999]">
+                <div class="px-4 py-3 border-b-[3px] border-[#603b2d] flex justify-between items-center bg-[#dcdad3]">
                     <h3 class="font-black text-slate-800 tracking-tight">卡牌一覽</h3>
                     <button id="closeModal" aria-label="關閉" class="w-8 h-8 flex items-center justify-center bg-[#16344c] text-[#e7c980] border-2 border-[#c48e36] font-black active:translate-x-[2px] active:translate-y-[2px]">×</button>
                 </div>
-                <div class="overflow-y-auto p-3 flex flex-col gap-2 bg-[#efe0bf]">
+                <div class="overflow-y-auto p-3 flex flex-col gap-2 bg-[#eceae5]">
                     ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => renderCardListEntryHTML(def)).join('')}
                 </div>
             `;
@@ -4899,7 +4899,7 @@ function render() {
     }
 
     const container = document.createElement('div');
-    container.className = 'h-[100dvh] w-full bg-[#efe0bf] text-[#2a1c10] font-sans overflow-hidden flex';
+    container.className = 'h-[100dvh] w-full bg-[#eceae5] text-[#2a2420] font-sans overflow-hidden flex';
 
     // Left: main game
     const left = document.createElement('div');
@@ -5084,8 +5084,8 @@ function render() {
         modal.onclick = (e) => e.stopPropagation();
         
         modal.innerHTML = `
-            <div class="px-5 py-3 border-b-[3px] border-[#603b2d] flex justify-between items-center bg-[#e0c999]">
-                <h3 class="font-black text-[#2a1c10] tracking-tight flex items-center gap-2">
+            <div class="px-5 py-3 border-b-[3px] border-[#603b2d] flex justify-between items-center bg-[#dcdad3]">
+                <h3 class="font-black text-[#2a2420] tracking-tight flex items-center gap-2">
                     <span class="w-2.5 h-2.5 bg-[#c48e36] border-2 border-[#603b2d]"></span>
                     卡牌一覽
                 </h3>
@@ -5093,10 +5093,10 @@ function render() {
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>
-            <div class="overflow-y-auto p-4 flex flex-col gap-2 bg-[#efe0bf]">
+            <div class="overflow-y-auto p-4 flex flex-col gap-2 bg-[#eceae5]">
                 ${[...CARD_DEFS].sort((a, b) => a.imgNo - b.imgNo).map(def => renderCardListEntryHTML(def, 'hover:border-indigo-100 transition-colors')).join('')}
             </div>
-            <div class="p-3 bg-[#e0c999] border-t-[3px] border-[#603b2d] text-center">
+            <div class="p-3 bg-[#dcdad3] border-t-[3px] border-[#603b2d] text-center">
                 <button id="closeModalBtn" class="w-full bg-[#16344c] text-[#e7c980] py-2.5 rounded-none font-black text-xs tracking-widest border-2 border-[#c48e36] active:translate-x-[2px] active:translate-y-[2px]">關閉列表 Close</button>
             </div>
         `;
