@@ -4305,7 +4305,14 @@ function renderMobilePlayerBlock(
     void position;
     // The current player's block grows to fill the leftover height so the board
     // never leaves a dead gap above the hand dock; the opponent strip stays compact.
-    const growth = position === 'bottom' ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0';
+    // 有顯示場地的區塊都用 flex-1 共享高度。關鍵在於「展開對手場地」時：
+    // 對手區塊若是 shrink-0，就會把空間吃光、把自己的場地壓成 0 高度而消失。
+    // 兩邊都可伸縮，空間就會對分，雙方場地同時看得到。
+    // 有顯示場地的區塊都用 flex-1 共享高度，並給一個內容下限。
+    // 兩件事都必要：對手區塊若是 shrink-0，展開時會把空間吃光、把自己的
+    // 場地壓成 0 高度而整個消失；但若允許無限收縮，卡槽又會擠出區塊之外。
+    // 兩塊同時展開時本來就塞不進一個螢幕，超出的部分交給捲動。
+    const growth = showBoard ? 'flex-1 min-h-[240px] flex flex-col' : 'shrink-0';
     wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-[#f2cdc9]' : 'bg-[#ccdde8]'} ${growth}`;
 
     // compact header
@@ -4419,15 +4426,13 @@ function renderMobilePlayerBlock(
         // only so the zones are bounded by the board height, which lets the
         // slots SHRINK when the hand dock is open on a short screen instead of
         // pushing the badges out of view. `pb-5` reserves the badge overhang.
-        board.className = position === 'bottom'
-            ? 'mt-6 flex-1 min-h-0 flex items-stretch justify-center gap-1 pb-5'
-            : 'mt-6 flex items-start justify-center gap-1';
+        board.className = 'mt-4 flex-1 min-h-0 flex items-stretch justify-center gap-1 pb-5';
 
         [0, 1, 2].forEach(aIdx => {
             const zone = document.createElement('div');
             // No `h-full`: an explicit height would make the cross size non-auto
             // and switch OFF the parent's `items-stretch`.
-            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-none transition-all border-2 border-transparent ${position === 'bottom' ? 'min-h-0' : ''} ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
+            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-none transition-all border-2 border-transparent min-h-0 ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
 
             zone.innerHTML = `
                 <div class="w-full flex items-center justify-center pt-2 pb-0">
@@ -4442,7 +4447,9 @@ function renderMobilePlayerBlock(
             // h-[200px] is the height it wants; min-h-[110px] is how far it may
             // shrink when the dock leaves less room (flex-shrink is on by default,
             // and the stacked cards are absolutely positioned so nothing blocks it).
-            const slotSize = position === 'bottom' ? 'h-[200px] min-h-[110px]' : 'h-[200px]';
+            // 想要的高度是 200px，空間不足時（手牌區展開、或對手場地展開）
+            // 可收縮到 110px；堆疊的卡牌是絕對定位，不會擋住收縮。
+            const slotSize = 'h-[200px] min-h-[110px]';
             slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             // 拖曳出牌的放置目標（不需要先選牌，所以條件比點擊版寬鬆）
             if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
