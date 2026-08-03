@@ -4294,7 +4294,7 @@ function renderMobileMarketRow(typeColors) {
 function renderMobilePlayerBlock(
     idx,
     typeColors,
-    {position, showBoard}: {position: 'top' | 'bottom'; showBoard: boolean}
+    {position, showBoard, bothBoards}: {position: 'top' | 'bottom'; showBoard: boolean; bothBoards: boolean}
 ) {
     const p = players[idx];
     const isCurrent = currentPlayerIndex === idx;
@@ -4308,11 +4308,14 @@ function renderMobilePlayerBlock(
     // 有顯示場地的區塊都用 flex-1 共享高度。關鍵在於「展開對手場地」時：
     // 對手區塊若是 shrink-0，就會把空間吃光、把自己的場地壓成 0 高度而消失。
     // 兩邊都可伸縮，空間就會對分，雙方場地同時看得到。
-    // 有顯示場地的區塊都用 flex-1 共享高度，並給一個內容下限。
-    // 兩件事都必要：對手區塊若是 shrink-0，展開時會把空間吃光、把自己的
-    // 場地壓成 0 高度而整個消失；但若允許無限收縮，卡槽又會擠出區塊之外。
-    // 兩塊同時展開時本來就塞不進一個螢幕，超出的部分交給捲動。
-    const growth = showBoard ? 'flex-1 min-h-[240px] flex flex-col' : 'shrink-0';
+    // 只有一個場地要顯示時（一般情況）：用 flex-1 撐滿剩餘高度，卡槽可收縮，
+    // 整個畫面剛好一屏、不需要捲動。
+    // 兩個場地都要顯示時（展開對手場地）：兩塊各自取完整內容高度、都不收縮，
+    // 否則卡牌會被壓到擠出區塊、蓋到對方的顏色上。兩個完整場地本來就塞不進
+    // 一個手機螢幕，這種情況就交給捲動。
+    const growth = !showBoard
+        ? 'shrink-0'
+        : (bothBoards ? 'shrink-0 flex flex-col' : 'flex-1 min-h-0 flex flex-col');
     wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-[#f2cdc9]' : 'bg-[#ccdde8]'} ${growth}`;
 
     // compact header
@@ -4818,12 +4821,12 @@ function renderMobileLayout(typeColors) {
     inner.className = 'h-full flex flex-col';
 
     // 上方預設只顯示對手資訊；在需要點對手目標的模式下才顯示對手場地
-    inner.appendChild(renderMobilePlayerBlock(oppIdx, typeColors, {position: 'top', showBoard: showOpponentBoard}));
+    inner.appendChild(renderMobilePlayerBlock(oppIdx, typeColors, {position: 'top', showBoard: showOpponentBoard, bothBoards: showOpponentBoard}));
 
     // 購買階段市場改到下方 dock（與手牌同位置）
 
     // 下方顯示當回合玩家（顯示場地）
-    inner.appendChild(renderMobilePlayerBlock(curIdx, typeColors, {position: 'bottom', showBoard: true}));
+    inner.appendChild(renderMobilePlayerBlock(curIdx, typeColors, {position: 'bottom', showBoard: true, bothBoards: showOpponentBoard}));
 
     scroller.appendChild(inner);
     container.appendChild(scroller);
