@@ -4291,6 +4291,27 @@ function renderMobileMarketRow(typeColors) {
     return row;
 }
 
+// 卡牌在區域內是絕對定位、每張往下偏移 30px，所以一疊卡的實際高度會隨張數增加。
+// 卡槽若維持固定高度，超過幾張之後就會撐出區域，蓋到隔壁玩家的底色上。
+// 這裡算出「這疊卡至少需要多高」，讓卡槽（進而讓整個玩家區塊）自然長高。
+const CARD_STACK_OFFSET_PX = 30;
+
+function getSlotMinHeightPx(stackCount: number, cardHeightPx: number, emptyMinPx: number) {
+    if (stackCount <= 0) return emptyMinPx;
+    return Math.max(emptyMinPx, (stackCount - 1) * CARD_STACK_OFFSET_PX + cardHeightPx);
+}
+
+// height 用下限、max-height 用想要的值、再讓它 flex-grow 長上去。
+// 若把 height 直接設成想要的值，祖先算最小內容高度時就會用那個值，
+// 導致整個玩家區塊縮不下來、一般狀態也被迫捲動。
+function applySlotHeight(slot: HTMLElement, minPx: number, wantedPx: number) {
+    const cap = Math.max(minPx, wantedPx);
+    slot.style.height = `${minPx}px`;
+    slot.style.minHeight = `${minPx}px`;
+    slot.style.maxHeight = `${cap}px`;
+    slot.style.flexGrow = '1';
+}
+
 function renderMobilePlayerBlock(
     idx,
     typeColors,
@@ -4313,9 +4334,11 @@ function renderMobilePlayerBlock(
     // 兩個場地都要顯示時（展開對手場地）：兩塊各自取完整內容高度、都不收縮，
     // 否則卡牌會被壓到擠出區塊、蓋到對方的顏色上。兩個完整場地本來就塞不進
     // 一個手機螢幕，這種情況就交給捲動。
-    const growth = !showBoard
-        ? 'shrink-0'
-        : (bothBoards ? 'shrink-0 flex flex-col' : 'flex-1 min-h-0 flex flex-col');
+    // 不加 min-h-0：flex 項目預設 min-height:auto，意思是「可以長大、但不會被壓到
+    // 小於內容高度」。卡疊變高時區塊自然跟著變高，超出畫面的部分交給捲動，
+    // 不會再出現底色不足或卡牌蓋到對方區域。
+    void bothBoards;
+    const growth = showBoard ? 'flex-1 flex flex-col' : 'shrink-0';
     wrap.className = `px-3 py-2 ${idx === 0 ? 'bg-[#f2cdc9]' : 'bg-[#ccdde8]'} ${growth}`;
 
     // compact header
@@ -4450,11 +4473,16 @@ function renderMobilePlayerBlock(
             // h-[200px] is the height it wants; min-h-[110px] is how far it may
             // shrink when the dock leaves less room (flex-shrink is on by default,
             // and the stacked cards are absolutely positioned so nothing blocks it).
-            // 想要的高度是 200px，空間不足時（手牌區展開、或對手場地展開）
-            // 可收縮到 110px；堆疊的卡牌是絕對定位，不會擋住收縮。
-            const slotSize = 'h-[200px] min-h-[110px]';
+            // 想要的高度是 200px；空間不足時可收縮，但不得低於這疊卡實際需要的高度。
+            // 張數多時這個下限會超過 200px，區域就跟著變高。
+            const slotSize = 'h-[200px]';
             slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             // 拖曳出牌的放置目標（不需要先選牌，所以條件比點擊版寬鬆）
+            // 高度設成「下限」而不是「想要的值」，再用 flex-grow 往上長到上限。
+            // 這點很關鍵：祖先在算最小內容高度時看的是 height，若直接寫 200px，
+            // 整個玩家區塊就永遠縮不到 200px 以下，一般狀態也會被迫捲動。
+            // 卡疊變高時下限跟著變高，區域就自然變長。
+            applySlotHeight(slot, getSlotMinHeightPx(p.board[aIdx].length, 135, 110), 200);
             if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
@@ -5210,7 +5238,8 @@ function renderPlayerArea(idx: 0 | 1) {
         `;
 
         const slot = document.createElement('div');
-        slot.className = `minimal-slot w-[160px] h-[140px] border-2 border-dashed border-slate-200 bg-white/50 rounded-2xl relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+        slot.className = `minimal-slot w-[160px] h-[140px] border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-[#603b2d] cursor-pointer hover:bg-white' : ''}`;
+        applySlotHeight(slot, getSlotMinHeightPx(p.board[aIdx].length, 90, 140), 140);
         if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
         
         if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) {
