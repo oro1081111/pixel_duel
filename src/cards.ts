@@ -144,7 +144,7 @@ export const CARD_DEFS: CardDef[] = [
     name: '翡翠突刺',
     desc: '使當前所有強度為 1 或 2 的普通攻擊強度翻倍 [攻擊階段]',
     left: { type: 'attack', value: 1 },
-    right: { type: 'magic', value: 1 },
+    right: { type: 'attack', value: 1 },
   },
   {
     id: 'shield',
