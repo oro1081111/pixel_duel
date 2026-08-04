@@ -4312,6 +4312,35 @@ function applySlotHeight(slot: HTMLElement, minPx: number, wantedPx: number) {
     slot.style.flexGrow = '1';
 }
 
+// 攻擊徽章每列最多 3 個，超過就換行 —— 跟對手收合時的顯示方式一致。
+// 原本是單列 flex，攻擊次數一多就一路往橫向長，撐出卡槽外面。
+const ATTACK_BADGES_PER_ROW = 3;
+const ATTACK_BADGE_ROW_PX = 24;
+
+function createAttackBadgeRow(bottomOffsetClass: string) {
+    const wrap = document.createElement('div');
+    wrap.className = `absolute ${bottomOffsetClass} left-0 right-0 flex justify-center z-40`;
+    const grid = document.createElement('div');
+    // 用 auto 寬度的三欄格線，才會「剛好每 3 個換行」而不受徽章寬度影響
+    grid.className = 'grid grid-cols-[repeat(3,auto)] gap-1 justify-items-center';
+    grid.setAttribute('data-attack-badges', '');
+    wrap.appendChild(grid);
+    return {wrap, grid};
+}
+
+// 徽章是絕對定位、不佔版面高度，所以要另外把最多幾列算出來，
+// 讓場地保留對應的下方留白，換行後才不會壓到區塊邊緣。
+function getMaxAttackRows(p: PlayerState, isCurrent: boolean) {
+    let maxRows = 1;
+    [0, 1, 2].forEach(aIdx => {
+        const hits = (isCurrent ? p.currentAttacks[aIdx] : p.attackQueue[aIdx]) || [];
+        const pierce = (isCurrent ? p.piercingAttacks[aIdx] : (p.piercingQueue || [])[aIdx]) || [];
+        const count = hits.filter(v => v > 0).length + pierce.filter(v => v > 0).length;
+        maxRows = Math.max(maxRows, Math.ceil(count / ATTACK_BADGES_PER_ROW) || 1);
+    });
+    return maxRows;
+}
+
 function renderMobilePlayerBlock(
     idx,
     typeColors,
@@ -4452,7 +4481,8 @@ function renderMobilePlayerBlock(
         // only so the zones are bounded by the board height, which lets the
         // slots SHRINK when the hand dock is open on a short screen instead of
         // pushing the badges out of view. `pb-5` reserves the badge overhang.
-        board.className = 'mt-4 flex-1 min-h-0 flex items-stretch justify-center gap-1 pb-5';
+        board.className = 'mt-4 flex-1 min-h-0 flex items-stretch justify-center gap-1';
+        board.style.paddingBottom = `${20 + (getMaxAttackRows(p, isCurrent) - 1) * ATTACK_BADGE_ROW_PX}px`;
 
         [0, 1, 2].forEach(aIdx => {
             const zone = document.createElement('div');
@@ -4486,8 +4516,7 @@ function renderMobilePlayerBlock(
             if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
             if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
-            const atkContainer = document.createElement('div');
-            atkContainer.className = 'absolute -bottom-4 left-0 right-0 flex justify-center gap-1.5 z-40';
+            const {wrap: atkWrap, grid: atkContainer} = createAttackBadgeRow('-bottom-4');
             const effects = isCurrent ? p.currentAttacks[aIdx] : p.attackQueue[aIdx];
             effects.forEach((atkVal, hitIdx) => {
                 if (atkVal === 0) return;
@@ -4520,7 +4549,7 @@ function renderMobilePlayerBlock(
                 atkBadge.innerText = atkVal.toString();
                 atkContainer.appendChild(atkBadge);
             });
-            slot.appendChild(atkContainer);
+            slot.appendChild(atkWrap);
 
             const stack = p.board[aIdx];
             stack.forEach((card, cIdx) => {
@@ -5246,8 +5275,7 @@ function renderPlayerArea(idx: 0 | 1) {
             slot.onclick = () => playToBoard(aIdx);
         }
 
-        const atkContainer = document.createElement('div');
-        atkContainer.className = 'absolute -bottom-5 left-0 right-0 flex justify-center gap-1.5 z-40';
+        const {wrap: atkWrap, grid: atkContainer} = createAttackBadgeRow('-bottom-5');
         
     // Logic: If it's our turn, show current calculated attacks
     // If it's NOT our turn, show our attackQueue (attacks waiting to hit the opponent)
@@ -5299,7 +5327,7 @@ function renderPlayerArea(idx: 0 | 1) {
         atkContainer.appendChild(atkBadge);
     });
     
-    slot.appendChild(atkContainer);
+    slot.appendChild(atkWrap);
 
     const stack = p.board[aIdx];
     stack.forEach((card, cIdx) => {
