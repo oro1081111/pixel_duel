@@ -1,54 +1,11 @@
 import {CARD_DEFS, type CardAttr} from '../cards';
+// 與 UI 共用同一份規則型別與純計算（見 src/engine/state.ts）
+import {type GameCard, type PlayerState, createPlayer} from '../engine/state';
 import {getBaseAttrForDie} from '../basebars';
 
-type GameCard = {
-  id: string;
-  left: CardAttr;
-  right: CardAttr;
-  effectId: string;
-  effectName: string;
-  effectDesc: string;
-  name: string;
-};
 
-type PlayerState = {
-  name: string;
-  hp: number;
-  hand: GameCard[];
-  board: GameCard[][];
-  activeAreaEffects: Array<GameCard | null>;
-  attackQueue: number[][];
-  piercingQueue: number[][];
-  magic: number;
-  gold: number;
-  defense: number;
-  currentAttacks: number[][];
-  piercingAttacks: number[][];
-  cardsPlayedThisTurn: number;
-  chargeUsedIndices: number[];
-  amplifyUsedIndices: number[];
-  fateUsedIndices: number[];
-  evasionUsedIndices: number[];
-  reproductionUsedIndices: number[];
-  flareUsedIndices: number[];
-  thrustUsedIndices: number[];
-  barrierUsedIndices: number[];
-  forestUsedIndices: number[];
-  frostUsedIndices: number[];
-  magicLuckUsedIndices: number[];
-  illusionUsedIndices: number[];
-  illusionCopiedEffectIds: Array<string | null>;
-  magicSpentInJudging: number;
-  extraFrostAttacks: number[][];
-  contractTriggeredAreaIdx: number;
-  turnBaseStats: {
-    sums: number[];
-    defense: number[];
-    magic: number[];
-    gold: number[];
-  };
-  breakthroughApplied: boolean;
-};
+
+
 
 type AttackTarget = {areaIdx: number; hitIdx: number; val: number};
 type Winner = 0 | 1 | 'draw';
@@ -244,41 +201,6 @@ function createCard(def: (typeof CARD_DEFS)[number], id: number): GameCard {
   };
 }
 
-function createPlayer(name: string, hp: number): PlayerState {
-  return {
-    name,
-    hp,
-    hand: [],
-    board: [[], [], []],
-    activeAreaEffects: [null, null, null],
-    attackQueue: [[], [], []],
-    piercingQueue: [[], [], []],
-    magic: 0,
-    gold: 0,
-    defense: 0,
-    currentAttacks: [[0], [0], [0]],
-    piercingAttacks: [[], [], []],
-    cardsPlayedThisTurn: 0,
-    chargeUsedIndices: [],
-    amplifyUsedIndices: [],
-    fateUsedIndices: [],
-    evasionUsedIndices: [],
-    reproductionUsedIndices: [],
-    flareUsedIndices: [],
-    thrustUsedIndices: [],
-    barrierUsedIndices: [],
-    forestUsedIndices: [],
-    frostUsedIndices: [],
-    magicLuckUsedIndices: [],
-    illusionUsedIndices: [],
-    illusionCopiedEffectIds: [null, null, null],
-    magicSpentInJudging: 0,
-    extraFrostAttacks: [[], [], []],
-    contractTriggeredAreaIdx: -1,
-    turnBaseStats: {sums: [0, 0, 0], defense: [0, 0, 0], magic: [0, 0, 0], gold: [0, 0, 0]},
-    breakthroughApplied: false,
-  };
-}
 
 class SimulationGame {
   deck: GameCard[] = [];
