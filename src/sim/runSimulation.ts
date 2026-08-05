@@ -1,5 +1,8 @@
 import {pathToFileURL} from 'node:url';
 
+import {banditChooseActivation, banditChoosePlayPlan, type BanditConfig, DEFAULT_BANDIT_CONFIG} from './bandit';
+import {chooseUniform, randInt, rng} from './rng';
+
 import type {CardAttr} from '../cards';
 // 與 UI 共用同一份規則型別與純計算（見 src/engine/state.ts）
 import {type GameCard, type PlayerState, createPlayer} from '../engine/state';
@@ -43,8 +46,17 @@ import {getBaseAttrForDie} from '../basebars';
 type AttackTarget = {areaIdx: number; hitIdx: number; val: number};
 type Winner = 0 | 1 | 'draw';
 type OpeningMode = 'prep' | 'even' | 'staged';
-type AiDifficulty = 'normal' | 'expert';
-type MatchupMode = 'custom' | 'expert-mirror' | 'expert-normal';
+/*
+ * bandit：新的單回合模擬 AI（見 sim/bandit.ts）。
+ * 它只接管「出牌」與「效果發動」兩個決策點；其餘階段沿用 expert 的啟發式，
+ * rollout 內部也一律用 expert 走完 —— 所以除了那兩個決策點，行為與 expert 相同。
+ */
+type AiDifficulty = 'normal' | 'expert' | 'bandit';
+type MatchupMode = 'custom' | 'expert-mirror' | 'expert-normal' | 'bandit-expert';
+
+function isAiDifficulty(v: string): v is AiDifficulty {
+  return v === 'normal' || v === 'expert' || v === 'bandit';
+}
 
 const ILLUSION_UNCOPYABLE_EFFECT_IDS = new Set<string>(['lucky', 'fate', 'frost']);
 
@@ -58,6 +70,7 @@ function parseArgs() {
     p0Ai: 'normal' as AiDifficulty,
     p1Ai: 'normal' as AiDifficulty,
     matchup: 'custom' as MatchupMode,
+    banditConfig: {...DEFAULT_BANDIT_CONFIG},
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -79,21 +92,31 @@ function parseArgs() {
       opts.opening = next;
       i++;
     } else if (arg === '--ai' && next) {
-      if (next !== 'normal' && next !== 'expert') throw new Error('--ai must be "normal" or "expert"');
+      if (!isAiDifficulty(next)) throw new Error('--ai must be "normal", "expert" or "bandit"');
       opts.p0Ai = next;
       opts.p1Ai = next;
       i++;
     } else if (arg === '--p0-ai' && next) {
-      if (next !== 'normal' && next !== 'expert') throw new Error('--p0-ai must be "normal" or "expert"');
+      if (!isAiDifficulty(next)) throw new Error('--p0-ai must be "normal", "expert" or "bandit"');
       opts.p0Ai = next;
       i++;
     } else if (arg === '--p1-ai' && next) {
-      if (next !== 'normal' && next !== 'expert') throw new Error('--p1-ai must be "normal" or "expert"');
+      if (!isAiDifficulty(next)) throw new Error('--p1-ai must be "normal", "expert" or "bandit"');
       opts.p1Ai = next;
       i++;
+    } else if (arg === '--play-budget' && next) {
+      opts.banditConfig.playBudget = Number(next);
+      i++;
+    } else if (arg === '--effect-budget' && next) {
+      opts.banditConfig.effectBudget = Number(next);
+      i++;
+    } else if (arg === '--play-cap' && next) {
+      opts.banditConfig.playCandidateCap = Number(next);
+      i++;
     } else if (arg === '--matchup' && next) {
-      if (next !== 'custom' && next !== 'expert-mirror' && next !== 'expert-normal') {
-        throw new Error('--matchup must be "custom", "expert-mirror", or "expert-normal"');
+      if (next !== 'custom' && next !== 'expert-mirror' && next !== 'expert-normal'
+          && next !== 'bandit-expert') {
+        throw new Error('--matchup must be "custom", "expert-mirror", "expert-normal" or "bandit-expert"');
       }
       opts.matchup = next;
       i++;
@@ -111,13 +134,10 @@ function parseArgs() {
   return opts;
 }
 
-function randInt(minInclusive: number, maxInclusive: number) {
-  return Math.floor(Math.random() * (maxInclusive - minInclusive + 1)) + minInclusive;
-}
-
-function chooseUniform<T>(arr: T[]): T {
-  return arr[randInt(0, arr.length - 1)];
-}
+/*
+ * 模擬器內所有亂數都走 sim/rng.ts 的可切換來源，不直接用 rng()。
+ * Bandit 的 rollout 會把來源換成固定 seed，才能做到可重現與 Common Random Numbers。
+ */
 
 function shuffleInPlace<T>(arr: T[]) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -132,7 +152,7 @@ function chooseHighestAttackTarget<T extends {val: number}>(targets: T[]): T {
 }
 
 function chooseAiWeightedAttackTarget<T extends {val: number}>(targets: T[]): T {
-  return Math.random() < 0.9 ? chooseHighestAttackTarget(targets) : chooseUniform(targets);
+  return rng() < 0.9 ? chooseHighestAttackTarget(targets) : chooseUniform(targets);
 }
 
 const AI_EFFECT_WEIGHTS: Record<string, number> = {
@@ -204,7 +224,41 @@ function aiEffectWeight(effectId: string | null | undefined) {
 
 
 
-class SimulationGame {
+// PlayerState 幾乎全是陣列，淺拷貝會讓 rollout 改到真實對局的狀態。
+function clonePlayer(p: PlayerState): PlayerState {
+  return {
+    ...p,
+    hand: [...p.hand],
+    board: p.board.map(a => [...a]),
+    activeAreaEffects: [...p.activeAreaEffects],
+    attackQueue: p.attackQueue.map(a => [...a]),
+    piercingQueue: p.piercingQueue.map(a => [...a]),
+    currentAttacks: p.currentAttacks.map(a => [...a]),
+    piercingAttacks: p.piercingAttacks.map(a => [...a]),
+    chargeUsedIndices: [...p.chargeUsedIndices],
+    amplifyUsedIndices: [...p.amplifyUsedIndices],
+    fateUsedIndices: [...p.fateUsedIndices],
+    evasionUsedIndices: [...p.evasionUsedIndices],
+    reproductionUsedIndices: [...p.reproductionUsedIndices],
+    flareUsedIndices: [...p.flareUsedIndices],
+    thrustUsedIndices: [...p.thrustUsedIndices],
+    barrierUsedIndices: [...p.barrierUsedIndices],
+    forestUsedIndices: [...p.forestUsedIndices],
+    frostUsedIndices: [...p.frostUsedIndices],
+    magicLuckUsedIndices: [...p.magicLuckUsedIndices],
+    illusionUsedIndices: [...p.illusionUsedIndices],
+    illusionCopiedEffectIds: [...p.illusionCopiedEffectIds],
+    extraFrostAttacks: p.extraFrostAttacks.map(a => [...a]),
+    turnBaseStats: {
+      sums: [...p.turnBaseStats.sums],
+      defense: [...p.turnBaseStats.defense],
+      magic: [...p.turnBaseStats.magic],
+      gold: [...p.turnBaseStats.gold],
+    },
+  };
+}
+
+export class SimulationGame {
   deck: GameCard[] = [];
   market: Array<GameCard | null> = [null, null, null];
   players: [PlayerState, PlayerState];
@@ -217,14 +271,107 @@ class SimulationGame {
   skippedPlayBecauseNoHand = false;
   turnCount = 0;
 
+  /*
+   * rollout 模式：這一份是 bandit 用來試打的複製品，不是真實對局。
+   * 開著時，expert 啟發式會有 ~15% 機率不選最高分、而是從前三名裡挑一個 ——
+   * rollout policy 完全貪心的話，同一個候選每次都走出幾乎一樣的路線，
+   * 模擬出來的變異數會低估真實情況。
+   */
+  rolloutNoise = false;
+
+  banditConfig: BanditConfig = DEFAULT_BANDIT_CONFIG;
+
   constructor(
     private readonly initialHp: number,
     private readonly maxTurns: number,
     private readonly openingMode: OpeningMode,
     private readonly aiDifficulties: [AiDifficulty, AiDifficulty],
+    skipInit = false,
   ) {
     this.players = [createPlayer('First', initialHp), createPlayer('Second', initialHp)];
-    this.initGame();
+    if (!skipInit) this.initGame();
+  }
+
+  usesExpertHeuristics() {
+    return this.currentAiDifficulty() !== 'normal';
+  }
+
+  /*
+   * 從一堆已評分的選項中挑一個。
+   * 正式對局：取最高分（同分隨機）。rollout：85% 取最高分，15% 從前三名抽。
+   */
+  pickScored<T extends {score: number}>(items: T[]): T {
+    if (items.length === 0) throw new Error('pickScored: empty');
+    const sorted = [...items].sort((a, b) => b.score - a.score);
+    if (this.rolloutNoise && sorted.length > 1 && rng() < 0.15) {
+      return chooseUniform(sorted.slice(0, Math.min(3, sorted.length)));
+    }
+    const maxScore = sorted[0].score;
+    return chooseUniform(sorted.filter(x => x.score === maxScore));
+  }
+
+  /*
+   * 複製出一份可以隨便亂試的對局狀態。
+   *
+   * 牌庫會被重新洗過：剩下有哪些牌是公開資訊（總卡表扣掉看得見的），
+   * 但「順序」不是 —— 直接沿用真實順序等於讓 AI 偷看下一張抽到什麼。
+   */
+  cloneForRollout(): SimulationGame {
+    const clone = new SimulationGame(
+      this.initialHp, this.maxTurns, this.openingMode, this.aiDifficulties, true,
+    );
+    clone.deck = shuffled(this.deck, rng);
+    clone.market = [...this.market];
+    clone.players = [clonePlayer(this.players[0]), clonePlayer(this.players[1])];
+    clone.currentPlayerIndex = this.currentPlayerIndex;
+    clone.currentPhaseIndex = this.currentPhaseIndex;
+    clone.diceResults = [...this.diceResults];
+    clone.firstPlayerFirstTurn = this.firstPlayerFirstTurn;
+    clone.winner = this.winner;
+    clone.buyDeckDrawCount = this.buyDeckDrawCount;
+    clone.skippedPlayBecauseNoHand = this.skippedPlayBecauseNoHand;
+    clone.turnCount = this.turnCount;
+    clone.rolloutNoise = true;
+    return clone;
+  }
+
+  /*
+   * 從目前所在的階段一路跑到回合結束（但不呼叫 endTurn —— 那會把魔力金幣清成 0，
+   * 而我們正要評估的就是這回合產出了什麼）。
+   * 這段必須和 runAiTurn 的階段順序完全一致，否則模擬的就不是真的那個遊戲。
+   */
+  finishTurnForRollout(skipActivations = false, skipPhase = -1) {
+    // skipActivations：bandit 選了 STOP，該階段不應該再由 expert 補發動
+    const runPhase = (phase: number) => {
+      if (skipActivations && phase === skipPhase) this.currentPhaseIndex = phase;
+      else this.aiActivationLoop(phase);
+    };
+
+    if (this.currentPhaseIndex <= 1) {
+      this.currentPhaseIndex = 1;
+      if (this.diceResults.length === 0) this.aiRollPhase();
+      runPhase(1);
+      this.nextPhase();
+    }
+    if (this.currentPhaseIndex === 2) { runPhase(2); this.nextPhase(); }
+    if (this.currentPhaseIndex === 3) { runPhase(3); this.nextPhase(); }
+    if (this.currentPhaseIndex === 4) { runPhase(4); this.nextPhase(); }
+    if (this.winner !== null) return;
+    if (this.currentPhaseIndex === 5) { runPhase(5); this.nextPhase(); }
+    if (this.currentPhaseIndex === 6) this.aiBuyPhase();
+  }
+
+  playCardPublic(handIdx: number, areaIdx: number) {
+    this.playCard(handIdx, areaIdx);
+  }
+
+  availableActivationsPublic() {
+    return this.availableActivations();
+  }
+
+  // bandit 用來預篩出牌候選的靜態評分；就是 expert 原本那套
+  scoreCardForBandit(card: GameCard, areaIdx = -1) {
+    return this.scoreCardForExpert(card, areaIdx);
   }
 
   run(): {winner: Winner; turns: number} {
@@ -237,7 +384,7 @@ class SimulationGame {
   }
 
   private initGame() {
-    this.deck = shuffled(buildDeck());
+    this.deck = shuffled(buildDeck(), rng);
 
     const p0InitialHandSize = this.openingMode === 'staged' ? 4 : 3;
     const p1InitialHandSize = this.openingMode === 'even' ? 3 : this.openingMode === 'staged' ? 5 : 4;
@@ -274,7 +421,7 @@ class SimulationGame {
   private playRandomCardsForCurrentPlayer(count: number) {
     const p = this.currentPlayer();
     for (let i = 0; i < count && p.hand.length > 0; i++) {
-      if (this.currentAiDifficulty() === 'expert') {
+      if (this.usesExpertHeuristics()) {
         const choice = this.chooseExpertPlay();
         if (!choice) break;
         this.playCard(choice.handIdx, choice.areaIdx);
@@ -294,28 +441,71 @@ class SimulationGame {
     this.skippedPlayBecauseNoHand = false;
     this.resetTurnState(this.currentPlayer());
 
-    this.aiPlayPhase();
+    const isBandit = this.currentAiDifficulty() === 'bandit';
+    if (isBandit) this.banditPlayPhase();
+    else this.aiPlayPhase();
     if (this.winner !== null) return;
 
     this.aiRollPhase();
-    this.aiActivationLoop(1);
+    const activations = (phase: number) =>
+      isBandit ? this.banditActivationLoop(phase) : this.aiActivationLoop(phase);
+
+    activations(1);
     this.nextPhase();
 
-    this.aiActivationLoop(2);
+    activations(2);
     this.nextPhase();
 
-    this.aiActivationLoop(3);
+    activations(3);
     this.nextPhase();
 
-    this.aiActivationLoop(4);
+    activations(4);
     this.nextPhase();
     if (this.winner !== null) return;
 
-    this.aiActivationLoop(5);
+    activations(5);
     this.nextPhase();
 
     this.aiBuyPhase();
     this.endTurn();
+  }
+
+  /*
+   * 出牌：把「打幾張、哪幾張、放哪一區」當成一個完整方案來比較。
+   * 擲骰數是 5 - 出牌數，由出牌數固定，所以不是額外的決策點。
+   */
+  private banditPlayPhase() {
+    this.currentPhaseIndex = 0;
+    const p = this.currentPlayer();
+    if (p.hand.length === 0) {
+      this.skippedPlayBecauseNoHand = true;
+      this.currentPhaseIndex = 1;
+      return;
+    }
+    const plan = banditChoosePlayPlan(this, this.banditConfig);
+    if (plan) {
+      for (const step of plan) {
+        const handIdx = p.hand.findIndex(c => c.id === step.cardId);
+        if (handIdx !== -1) this.playCard(handIdx, step.areaIdx);
+      }
+    }
+    this.currentPhaseIndex = 1;
+  }
+
+  /*
+   * 效果發動：每次只決定「下一個原子行動」，做完重新搜。
+   * 上限 200 是防呆 —— 可重複發動的效果（護盾、魔彈）魔力耗盡就會自然停。
+   */
+  private banditActivationLoop(phase: number) {
+    this.currentPhaseIndex = phase;
+    for (let i = 0; i < 200 && this.winner === null; i++) {
+      const acts = this.availableActivations();
+      if (acts.length === 0) return;
+      const choice = banditChooseActivation(this, phase, this.banditConfig);
+      if (choice === 'STOP') return;
+      acts[choice.index]?.run();
+      this.currentPhaseIndex = phase;
+    }
   }
 
   private currentPlayer() {
@@ -683,7 +873,7 @@ class SimulationGame {
     let best: {handIdx: number; areaIdx: number; score: number} | null = null;
     p.hand.forEach((card, handIdx) => {
       for (let areaIdx = 0; areaIdx < 3; areaIdx++) {
-        const score = this.scoreCardForExpert(card, areaIdx) + Math.random() * 0.15;
+        const score = this.scoreCardForExpert(card, areaIdx) + rng() * 0.15;
         if (!best || score > best.score) best = {handIdx, areaIdx, score};
       }
     });
@@ -950,7 +1140,7 @@ class SimulationGame {
   }
 
   private aiPlayPhase() {
-    if (this.currentAiDifficulty() === 'expert') {
+    if (this.usesExpertHeuristics()) {
       return this.expertPlayPhase();
     }
 
@@ -1007,7 +1197,7 @@ class SimulationGame {
     const rollOptions = shouldRollFiveBecauseNoHand
       ? [5]
       : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
-    const count = this.currentAiDifficulty() === 'expert' ? this.chooseExpertRollCount(rollOptions) : chooseUniform(rollOptions);
+    const count = this.usesExpertHeuristics() ? this.chooseExpertRollCount(rollOptions) : chooseUniform(rollOptions);
     this.rollDice(count);
   }
 
@@ -1020,7 +1210,7 @@ class SimulationGame {
     const finalCount = luckyIdx !== -1 ? count + 1 : count;
     this.diceResults = Array.from({length: finalCount}, () => randInt(1, 6));
     if (luckyIdx !== -1 && this.diceResults.length > 0) {
-      const idx = this.currentAiDifficulty() === 'expert'
+      const idx = this.usesExpertHeuristics()
         ? this.chooseLowestValueDieIndex()
         : randInt(0, this.diceResults.length - 1);
       this.diceResults.splice(idx, 1);
@@ -1096,15 +1286,14 @@ class SimulationGame {
     for (let i = 0; i < 200 && this.winner === null; i++) {
       const acts = this.availableActivations();
       if (acts.length === 0) return;
-      if (this.currentAiDifficulty() === 'expert') {
+      if (this.usesExpertHeuristics()) {
         const scored = acts
-          .map(act => ({act, score: this.scoreActivationForExpert(act.label) + Math.random() * 0.1}))
+          .map(act => ({act, score: this.scoreActivationForExpert(act.label) + rng() * 0.1}))
           .filter(x => x.score >= 2.75);
         if (scored.length === 0) return;
-        const maxScore = Math.max(...scored.map(x => x.score));
-        chooseUniform(scored.filter(x => x.score === maxScore)).act.run();
+        this.pickScored(scored).act.run();
       } else {
-        if (Math.random() > 0.9) return;
+        if (rng() > 0.9) return;
         chooseUniform(acts).run();
       }
     }
@@ -1162,7 +1351,7 @@ class SimulationGame {
     const p = this.currentPlayer();
     if (p.fateUsedIndices.includes(areaIdx) || this.diceResults.length === 0) return;
     let indices: number[];
-    if (this.currentAiDifficulty() === 'expert') {
+    if (this.usesExpertHeuristics()) {
       indices = this.chooseExpertFateDiceIndices();
     } else {
       const n = this.diceResults.length;
@@ -1171,21 +1360,21 @@ class SimulationGame {
       shuffleInPlace(indices);
       indices = indices.slice(0, k);
     }
-    applyFate(p, areaIdx, this.diceResults, indices);
+    applyFate(p, areaIdx, this.diceResults, indices, rng);
     if (this.currentPhaseIndex === 2) this.handleJudging();
   }
 
   private useFrost(areaIdx: number) {
     const p = this.currentPlayer();
     if (p.frostUsedIndices.includes(areaIdx) || this.diceResults.length === 0) return;
-    const dieIdx = this.currentAiDifficulty() === 'expert'
+    const dieIdx = this.usesExpertHeuristics()
       ? this.chooseExpertFrostDieIndex()
       : randInt(0, this.diceResults.length - 1);
-    applyFrost(p, areaIdx, this.diceResults, dieIdx);
+    applyFrost(p, areaIdx, this.diceResults, dieIdx, rng);
   }
 
   private useMagicLuck(areaIdx: number) {
-    if (applyMagicLuck(this.currentPlayer(), areaIdx, this.diceResults) === null) return;
+    if (applyMagicLuck(this.currentPlayer(), areaIdx, this.diceResults, rng) === null) return;
     // 多了一顆骰子，判定要整個重算（疾風、暗影、光輝都看骰子數）
     this.handleJudging();
   }
@@ -1197,7 +1386,7 @@ class SimulationGame {
       if (c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId)) candidates.push(idx);
     });
     if (p.magic < 1 || candidates.length === 0) return;
-    const oppAreaIdx = this.currentAiDifficulty() === 'expert'
+    const oppAreaIdx = this.usesExpertHeuristics()
       ? this.chooseExpertIllusionTargetArea()
       : chooseUniform(candidates);
     const targetCard = this.opponent().activeAreaEffects[oppAreaIdx];
@@ -1211,7 +1400,7 @@ class SimulationGame {
     const opp = this.opponent();
     const targets = this.listOpponentDodgeTargets();
     if (p.magic < 3 || targets.length === 0) return;
-    const target = this.currentAiDifficulty() === 'expert'
+    const target = this.usesExpertHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyEvasion(p, opp, areaIdx, target.areaIdx, target.hitIdx);
@@ -1246,7 +1435,7 @@ class SimulationGame {
     if (p.chargeUsedIndices.includes(areaIdx) || p.magic < 2) return;
     const targets = this.listSelfAttackTargets();
     if (targets.length === 0) return;
-    const target = this.currentAiDifficulty() === 'expert'
+    const target = this.usesExpertHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyCharge(p, areaIdx, target.areaIdx, target.hitIdx);
@@ -1257,7 +1446,7 @@ class SimulationGame {
     if (p.reproductionUsedIndices.includes(areaIdx) || p.magic < 2) return;
     const targets = this.listSelfAttackTargets();
     if (targets.length === 0) return;
-    const target = this.currentAiDifficulty() === 'expert'
+    const target = this.usesExpertHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyReproduction(p, areaIdx, target.areaIdx, target.hitIdx);
@@ -1268,7 +1457,7 @@ class SimulationGame {
     if (p.flareUsedIndices.includes(areaIdx) || p.magic < 3) return;
     const targets = this.listSelfAttackTargets();
     if (targets.length === 0) return;
-    const target = this.currentAiDifficulty() === 'expert'
+    const target = this.usesExpertHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyFlare(p, areaIdx, target.areaIdx, target.hitIdx);
@@ -1297,7 +1486,7 @@ class SimulationGame {
       const nextDrawCost = this.deckDrawCost(nextDrawIndex);
       if (this.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
         actions.push({
-          score: this.currentAiDifficulty() === 'expert' ? 5.8 - nextDrawCost * 1.1 + Math.random() * 0.1 : Math.random(),
+          score: this.usesExpertHeuristics() ? 5.8 - nextDrawCost * 1.1 + rng() * 0.1 : rng(),
           run: () => this.buyFromDeck(),
         });
       }
@@ -1306,17 +1495,16 @@ class SimulationGame {
         const price = this.marketPrice(idx);
         if (c && p.gold >= price) {
           actions.push({
-            score: this.currentAiDifficulty() === 'expert'
-              ? this.scoreCardForExpert(c) - price * 1.35 + Math.random() * 0.1
-              : Math.random(),
+            score: this.usesExpertHeuristics()
+              ? this.scoreCardForExpert(c) - price * 1.35 + rng() * 0.1
+              : rng(),
             run: () => this.buyMarketCard(idx),
           });
         }
       });
       if (actions.length === 0) return;
-      if (this.currentAiDifficulty() === 'expert') {
-        const maxScore = Math.max(...actions.map(a => a.score));
-        chooseUniform(actions.filter(a => a.score === maxScore)).run();
+      if (this.usesExpertHeuristics()) {
+        this.pickScored(actions).run();
       } else {
         chooseUniform(actions).run();
       }
@@ -1380,7 +1568,9 @@ function runSeries(opts: ReturnType<typeof parseArgs>, p0Ai: AiDifficulty, p1Ai:
   let totalTurns = 0;
 
   for (let i = 0; i < opts.games; i++) {
-    const result = new SimulationGame(opts.hp, opts.maxTurns, opts.opening, [p0Ai, p1Ai]).run();
+    const game = new SimulationGame(opts.hp, opts.maxTurns, opts.opening, [p0Ai, p1Ai]);
+    game.banditConfig = opts.banditConfig;
+    const result = game.run();
     totalTurns += result.turns;
     if (result.winner === 0) firstWins++;
     else if (result.winner === 1) secondWins++;
@@ -1413,6 +1603,46 @@ function printSeries(stats: SeriesStats) {
   console.log(`Throughput: ${(stats.games / (stats.elapsedMs / 1000)).toFixed(0)} games/sec`);
 }
 
+/*
+ * 兩個 AI 各當一次先手再合併統計。
+ * 這個遊戲的先手/後手起手張數不同（3 vs 4），單邊對戰量不出真實強度差。
+ */
+function runTwoLegMatchup(
+  opts: ReturnType<typeof parseArgs>,
+  aiA: AiDifficulty,
+  aiB: AiDifficulty,
+) {
+  console.log(`Matchup: ${aiA}-${aiB}`);
+  console.log(`Games per seat: ${opts.games}`);
+  console.log('');
+
+  console.log(`--- Leg 1: ${aiA} first vs ${aiB} second ---`);
+  const legA = runSeries(opts, aiA, aiB);
+  printSeries(legA);
+  console.log('');
+
+  console.log(`--- Leg 2: ${aiB} first vs ${aiA} second ---`);
+  const legB = runSeries(opts, aiB, aiA);
+  printSeries(legB);
+  console.log('');
+
+  const totalGames = legA.games + legB.games;
+  const aWins = legA.firstWins + legB.secondWins;
+  const bWins = legA.secondWins + legB.firstWins;
+  const draws = legA.draws + legB.draws;
+  const totalTurns = legA.totalTurns + legB.totalTurns;
+  const elapsedMs = legA.elapsedMs + legB.elapsedMs;
+
+  console.log('--- Aggregate by AI ---');
+  console.log(`Total simulations: ${totalGames}`);
+  console.log(`${aiA} wins: ${aWins} (${formatPct(aWins, totalGames)})`);
+  console.log(`${aiB} wins: ${bWins} (${formatPct(bWins, totalGames)})`);
+  console.log(`Draws/capped: ${draws} (${formatPct(draws, totalGames)})`);
+  console.log(`Average turns: ${(totalTurns / totalGames).toFixed(2)}`);
+  console.log(`Elapsed: ${(elapsedMs / 1000).toFixed(2)}s`);
+  console.log(`Throughput: ${(totalGames / (elapsedMs / 1000)).toFixed(0)} games/sec`);
+}
+
 function main() {
   const opts = parseArgs();
 
@@ -1422,35 +1652,12 @@ function main() {
   console.log('');
 
   if (opts.matchup === 'expert-normal') {
-    console.log(`Matchup: expert-normal`);
-    console.log(`Games per seat: ${opts.games}`);
-    console.log('');
+    runTwoLegMatchup(opts, 'expert', 'normal');
+    return;
+  }
 
-    console.log('--- Leg 1: Expert first vs Normal second ---');
-    const expertFirst = runSeries(opts, 'expert', 'normal');
-    printSeries(expertFirst);
-    console.log('');
-
-    console.log('--- Leg 2: Normal first vs Expert second ---');
-    const expertSecond = runSeries(opts, 'normal', 'expert');
-    printSeries(expertSecond);
-    console.log('');
-
-    const totalGames = expertFirst.games + expertSecond.games;
-    const expertWins = expertFirst.firstWins + expertSecond.secondWins;
-    const normalWins = expertFirst.secondWins + expertSecond.firstWins;
-    const draws = expertFirst.draws + expertSecond.draws;
-    const totalTurns = expertFirst.totalTurns + expertSecond.totalTurns;
-    const elapsedMs = expertFirst.elapsedMs + expertSecond.elapsedMs;
-
-    console.log('--- Aggregate by AI ---');
-    console.log(`Total simulations: ${totalGames}`);
-    console.log(`Expert wins: ${expertWins} (${formatPct(expertWins, totalGames)})`);
-    console.log(`Normal wins: ${normalWins} (${formatPct(normalWins, totalGames)})`);
-    console.log(`Draws/capped: ${draws} (${formatPct(draws, totalGames)})`);
-    console.log(`Average turns: ${(totalTurns / totalGames).toFixed(2)}`);
-    console.log(`Elapsed: ${(elapsedMs / 1000).toFixed(2)}s`);
-    console.log(`Throughput: ${(totalGames / (elapsedMs / 1000)).toFixed(0)} games/sec`);
+  if (opts.matchup === 'bandit-expert') {
+    runTwoLegMatchup(opts, 'bandit', 'expert');
     return;
   }
 
