@@ -11,8 +11,24 @@ import {
     type GameCard,
     type PlayerState,
     createPlayer,
+    createGameState,
     damageThroughDefense,
 } from './engine/state';
+import {
+    getActivationMagicCost,
+    isMagicSpendActivation,
+    listActivations,
+} from './engine/activations';
+import {
+    buildDeck,
+    drawFromDeck as drawFromDeckList,
+    getDeckDrawCost,
+    getEffectiveEffectId,
+    getMarketPrice,
+    isMirageActive as isMirageActiveFor,
+    refillMarket as refillMarketList,
+    shuffled,
+} from './engine/deck';
 import {getBaseAttrForDie, getBaseBarImg} from './basebars';
 
 // Basebar image height (UI only)
@@ -429,7 +445,7 @@ function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
     };
 
     cardEl.addEventListener('pointerdown', (e: PointerEvent) => {
-        if (currentPhaseIndex !== 0) return;
+        if (S.currentPhaseIndex !== 0) return;
         if (e.button > 0) return;
         // 新一輪互動：先清掉上一輪殘留的旗標。
         // 觸控拖曳取消時瀏覽器不一定會補送 click，旗標留著就會把
@@ -441,7 +457,7 @@ function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
     });
 
     cardEl.addEventListener('pointermove', (e: PointerEvent) => {
-        if (e.pointerId !== pointerId || currentPhaseIndex !== 0) return;
+        if (e.pointerId !== pointerId || S.currentPhaseIndex !== 0) return;
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
 
@@ -475,7 +491,7 @@ function attachHandCardDrag(cardEl: HTMLElement, handIdx: number) {
         // 放開後瀏覽器仍會補一個 click，別讓它又去選取這張牌
         justDragged = true;
         if (areaIdx >= 0) {
-            selectedHandCardIndex = handIdx;
+            S.selectedHandCardIndex = handIdx;
             playToBoard(areaIdx);
         }
     });
@@ -512,24 +528,16 @@ const ILLUSION_UNCOPYABLE_EFFECT_IDS = new Set<string>(['lucky', 'fate', 'frost'
 
 // --- State ---
 
-let deck: GameCard[] = [];
-let market: Array<GameCard | null> = [null, null, null]; // [price3, price2, price1]
-let buyDeckDrawCount = 0; // 購買階段：已從牌庫抽了幾張 (1st/2nd/3rd)
-let players: [PlayerState, PlayerState] = [createPlayer('玩家 A'), createPlayer('玩家 B')];
+/*
+ * 規則狀態集中在這一個物件裡（見 engine/state.ts）。
+ * 之前這些是 30 幾個各自獨立的 module-level let，任何函式都能改、也無法整份複製；
+ * 模擬決策需要「複製當下局面往下跑」，所以規則狀態必須是一個可傳遞的值。
+ * 下面留在 main.ts 的仍是純畫面狀態。
+ */
+const S = createGameState();
 
-let currentPlayerIndex = 0;
-let currentPhaseIndex = 0;
-let diceResults: number[] = [];
-let selectedHandCardIndex = -1;
-let firstPlayerFirstTurn = true;
-let winner: string | null = null;
 // Winner modal (可關閉以查看最後場面)
 let winModalDismissed = false;
-let gameLog = ['遊戲開始！'];
-// 當回合開始時手牌為 0，視為「跳過出牌階段」，並在擲骰階段固定投 5 顆骰子
-let skippedPlayBecauseNoHand = false;
-// 一次性準備階段：後手先從手牌中打出 1 張到自己場地，才開始正式流程
-let inPreparationPhase = true;
 // Mobile UI: 手牌抽屜收合/展開
 let handDrawerOpen = false;
 // Mobile UI: 底部 dock 顯示內容（手牌 / 市場）
@@ -539,24 +547,6 @@ let mobileHandScrollLeft = 0;
 let desktopHandScrollLeft: [number, number] = [0, 0];
 // Mobile UI: 對手場地展開/收合（預設收合，節省空間）
 let mobileOpponentBoardOpen = false;
-let chargeSelectionMode = false;
-let chargeSourceAreaIdx = -1;
-let fateSelectionMode = false;
-let fateSourceAreaIdx = -1;
-let fateSelectedDiceIndices: number[] = [];
-let evasionSelectionMode = false;
-let evasionSourceAreaIdx = -1;
-let reproductionSelectionMode = false;
-let reproductionSourceAreaIdx = -1;
-let flareSelectionMode = false;
-let flareSourceAreaIdx = -1;
-let luckySelectionMode = false;
-let luckySourceAreaIdx = -1;
-let illusionSelectionMode = false;
-let illusionSourceAreaIdx = -1;
-let frostSelectionMode = false;
-let frostSourceAreaIdx = -1;
-let phaseHint = '選牌出牌';
 let showEffectList = false;
 
 type AppScreen = 'home' | 'rules' | 'game';
@@ -574,58 +564,20 @@ let phaseAdvanceLockUntil = 0;
 
 
 function resetGameStateForNewMatch() {
-    // Core collections
-    deck = [];
-    market = [null, null, null];
-    buyDeckDrawCount = 0;
+    /*
+     * 規則狀態整份換新。
+     * 這裡原本是 45 行逐欄位歸零 —— 每新增一個規則欄位就得記得回來補一行，
+     * 漏掉的那個會把上一局的殘留帶進新局（例如選取模式沒關）。
+     * 改成重建整份狀態後，漏掉就不可能發生。
+     */
+    Object.assign(S, createGameState(matchPlayerNames));
 
-    // Players
-    players = [createPlayer(matchPlayerNames[0]), createPlayer(matchPlayerNames[1])];
-
-    // Phase / turn
-    currentPlayerIndex = 0;
-    currentPhaseIndex = 0;
-    diceResults = [];
-    selectedHandCardIndex = -1;
-    firstPlayerFirstTurn = true;
-
-    // Winner UI
-    winner = null;
+    // 以下是純畫面狀態，不屬於規則，但沒清掉一樣會帶進新的一局。
     winModalDismissed = false;
-
-    // Logs
-    gameLog = ['遊戲開始！'];
-
-    // One-off flags / mobile UI
-    skippedPlayBecauseNoHand = false;
-    inPreparationPhase = true;
     handDrawerOpen = false;
     mobileDockTab = 'hand';
     mobileOpponentBoardOpen = false;
-
-    // Selection modes
-    chargeSelectionMode = false;
-    chargeSourceAreaIdx = -1;
-    fateSelectionMode = false;
-    fateSourceAreaIdx = -1;
-    fateSelectedDiceIndices = [];
-    evasionSelectionMode = false;
-    evasionSourceAreaIdx = -1;
-    reproductionSelectionMode = false;
-    reproductionSourceAreaIdx = -1;
-    flareSelectionMode = false;
-    flareSourceAreaIdx = -1;
-    luckySelectionMode = false;
-    luckySourceAreaIdx = -1;
-    illusionSelectionMode = false;
-    illusionSourceAreaIdx = -1;
-    frostSelectionMode = false;
-    frostSourceAreaIdx = -1;
-
-    // UI hints
-    phaseHint = '選牌出牌';
     showEffectList = false;
-
     phaseAdvanceLockUntil = 0;
 
     // 這些是純畫面狀態，但沒清掉會帶進新的一局：
@@ -649,7 +601,7 @@ function getComputerPlayerIndexForMode(mode: GameMode | null): 0 | 1 | null {
 
 function isComputerTurnNow() {
     const c = getComputerPlayerIndexForMode(selectedMode);
-    return appScreen === 'game' && c !== null && currentPlayerIndex === c;
+    return appScreen === 'game' && c !== null && S.currentPlayerIndex === c;
 }
 
 function setMatchPlayerNamesForMode(mode: GameMode) {
@@ -672,7 +624,7 @@ type PendingExitAction = 'home' | 'restart';
 let pendingExitAction: PendingExitAction | null = null;
 
 function requestExit(action: PendingExitAction) {
-    if (appScreen === 'game' && !winner) {
+    if (appScreen === 'game' && !S.winner) {
         pendingExitAction = action;
         hideGlobalTooltip();
         render();
@@ -820,7 +772,7 @@ function goHome() {
     showGameGuide = false;
     selectedMode = null;
     // keep game state but hide winner overlay etc.
-    winner = null;
+    S.winner = null;
     winModalDismissed = false;
     showEffectList = false;
     hideGlobalTooltip();
@@ -867,21 +819,21 @@ function restartMatch() {
 }
 
 function finishPreparationPhase() {
-    inPreparationPhase = false;
+    S.inPreparationPhase = false;
     // 開始正式流程：先手回合、出牌階段
-    currentPlayerIndex = 0;
-    currentPhaseIndex = 0;
-    selectedHandCardIndex = -1;
-    diceResults = [];
-    skippedPlayBecauseNoHand = false;
+    S.currentPlayerIndex = 0;
+    S.currentPhaseIndex = 0;
+    S.selectedHandCardIndex = -1;
+    S.diceResults = [];
+    S.skippedPlayBecauseNoHand = false;
     // Mobile：出牌階段時手牌抽屜自動彈出
     // 並切到手牌 tab
     mobileDockTab = 'hand';
     handDrawerOpen = isMobileLayout();
     // 準備階段的出牌數不應計入正式回合限制
-    players[0].cardsPlayedThisTurn = 0;
-    players[1].cardsPlayedThisTurn = 0;
-    phaseHint = '選牌出牌';
+    S.players[0].cardsPlayedThisTurn = 0;
+    S.players[1].cardsPlayedThisTurn = 0;
+    S.phaseHint = '選牌出牌';
     render();
 }
 
@@ -1142,46 +1094,19 @@ function renderRulesScreen() {
     return wrap;
 }
 
+// 牌庫 / 市場 / 價格的規則本體在 engine/deck.ts，UI 與模擬器共用同一份。
 function drawFromDeck() {
-    if (deck.length === 0) return null;
-    return deck.pop();
+    return drawFromDeckList(S.deck);
 }
 
 function refillMarket() {
-    // 1) 將剩餘市場牌往下掉（填 price1 -> price2 -> price3）
-    const remaining = market.filter((c): c is GameCard => Boolean(c));
-    const next = [null, null, null];
-    // bottom index 2 (price1), then 1, then 0
-    for (let i = remaining.length - 1; i >= 0; i--) {
-        const targetIdx = 2 - ((remaining.length - 1) - i);
-        if (targetIdx >= 0) next[targetIdx] = remaining[i];
-    }
-
-    // 2) 補空格：同樣由下往上補
-    for (let i = 2; i >= 0; i--) {
-        if (!next[i]) next[i] = drawFromDeck();
-    }
-    market = next;
-}
-
-function getDeckDrawCost(drawIndex: number) {
-    // 第 1/2/3 張價格分別 0/1/2
-    if (drawIndex <= 0) return 0;
-    if (drawIndex === 1) return 0;
-    if (drawIndex === 2) return 1;
-    if (drawIndex === 3) return 2;
-    // 只允許最多抽 3 張；超出視為不可抽
-    return Infinity;
-}
-
-function getMarketPrice(slotIdx: 0 | 1 | 2) {
-    return slotIdx === 0 ? 3 : slotIdx === 1 ? 2 : 1;
+    S.market = refillMarketList(S.market, S.deck);
 }
 
 function buyMarketCard(slotIdx: 0 | 1 | 2) {
-    if (currentPhaseIndex !== 6) return;
+    if (S.currentPhaseIndex !== 6) return;
     const p = getCurrentPlayer();
-    const card = market[slotIdx];
+    const card = S.market[slotIdx];
     if (!card) return;
 
     const price = getMarketPrice(slotIdx);
@@ -1189,26 +1114,26 @@ function buyMarketCard(slotIdx: 0 | 1 | 2) {
 
     p.gold -= price;
     p.hand.push(card);
-    market[slotIdx] = null;
+    S.market[slotIdx] = null;
     addLog(`${p.name} 購買市場牌「${card.effectName}」(-${price} 金)`);
     render();
 }
 
 function buyFromDeck() {
-    if (currentPhaseIndex !== 6) return;
+    if (S.currentPhaseIndex !== 6) return;
     const p = getCurrentPlayer();
 
-    const nextDrawIndex = buyDeckDrawCount + 1;
+    const nextDrawIndex = S.buyDeckDrawCount + 1;
     const cost = getDeckDrawCost(nextDrawIndex);
     if (!Number.isFinite(cost)) return;
     if (p.gold < cost) return;
-    if (deck.length === 0) return;
+    if (S.deck.length === 0) return;
 
     p.gold -= cost;
     const card = drawFromDeck();
     if (!card) return;
     p.hand.push(card);
-    buyDeckDrawCount = nextDrawIndex;
+    S.buyDeckDrawCount = nextDrawIndex;
 
     addLog(`${p.name} 從牌庫抽牌「${card.effectName}」(-${cost} 金, 第 ${nextDrawIndex} 張)`);
     render();
@@ -1289,8 +1214,8 @@ function toggleEffectList() {
 function addLog(msg) {
     // 遊戲內已經有紀錄面板，正式版不需要再往 console 灌訊息
     // （電腦回合每個動作都會呼叫這裡）。
-    gameLog.push(msg);
-    if (gameLog.length > 30) gameLog.shift(); // Keep more history
+    S.gameLog.push(msg);
+    if (S.gameLog.length > 30) S.gameLog.shift(); // Keep more history
 }
 
 // --- Computer AI (uniform random) ---
@@ -1320,7 +1245,7 @@ function sleep(ms: number) {
 function getAiName() {
     const idx = getComputerPlayerIndexForMode(selectedMode);
     if (idx === null) return 'AI';
-    return players[idx].name || 'AI';
+    return S.players[idx].name || 'AI';
 }
 
 function logAi(msg: string) {
@@ -1394,24 +1319,9 @@ const AI_ATTR_WEIGHTS: Record<string, number> = {
     gold: 1.15,
 };
 
-const MAGIC_SPEND_EFFECT_IDS = new Set([
-    'charge',
-    'reproduction',
-    'flare',
-    'magic_bullet',
-    'dodge',
-    'shield',
-    'barrier',
-    'forest',
-    'holy_light',
-    'soul_snatch',
-    'magic_luck',
-    'illusion',
-]);
-
-function isMagicSpendEffect(effectId: string | null | undefined) {
-    return !!effectId && MAGIC_SPEND_EFFECT_IDS.has(effectId);
-}
+// 「哪些效果要花魔力、花多少」由 engine/activations.ts 的發動條件表決定，
+// 不再另外維護一份 id 清單 —— 兩份清單遲早會對不上。
+const isMagicSpendEffect = isMagicSpendActivation;
 
 function countMagicSpendCards(p: PlayerState) {
     const activeCount = p.activeAreaEffects.filter(c => isMagicSpendEffect(c?.effectId)).length;
@@ -1471,7 +1381,7 @@ function aiAttrValue(attr: CardAttr, p = getCurrentPlayer()) {
 function areaAttrPotential(areaIdx: number, type: CardAttr['type'], p = getCurrentPlayer()) {
     let total = 0;
     ([areaIdx * 2 + 1, areaIdx * 2 + 2] as const).forEach(dieValue => {
-        const base = getBaseAttrForDie(currentPlayerIndex as 0 | 1, dieValue);
+        const base = getBaseAttrForDie(S.currentPlayerIndex as 0 | 1, dieValue);
         if (base.type === type) total += base.value;
     });
     p.board[areaIdx].forEach(card => {
@@ -1485,7 +1395,7 @@ function averageAreaDieValue(areaIdx: number, p = getCurrentPlayer()) {
     const values = [areaIdx * 2 + 1, areaIdx * 2 + 2];
     return values.reduce((sum, dieValue) => {
         const isLeft = dieValue % 2 !== 0;
-        const base = getBaseAttrForDie(currentPlayerIndex as 0 | 1, dieValue);
+        const base = getBaseAttrForDie(S.currentPlayerIndex as 0 | 1, dieValue);
         let score = aiAttrValue(base, p);
         p.board[areaIdx].forEach(card => {
             score += aiAttrValue(isLeft ? card.left : card.right, p);
@@ -1509,7 +1419,7 @@ function aiEffectWeight(effectId: string | null | undefined) {
 
 function getAreaDiceCounts() {
     const counts = [0, 0, 0];
-    diceResults.forEach(v => counts[Math.floor((v - 1) / 2)]++);
+    S.diceResults.forEach(v => counts[Math.floor((v - 1) / 2)]++);
     return counts;
 }
 
@@ -1517,7 +1427,7 @@ function estimateDieValueForCurrentPlayer(dieValue: number) {
     const p = getCurrentPlayer();
     const areaIdx = Math.floor((dieValue - 1) / 2);
     const isLeft = dieValue % 2 !== 0;
-    const base = getBaseAttrForDie(currentPlayerIndex as 0 | 1, dieValue);
+    const base = getBaseAttrForDie(S.currentPlayerIndex as 0 | 1, dieValue);
     let score = aiAttrValue(base);
     p.board[areaIdx].forEach(card => {
         score += aiAttrValue(isLeft ? card.left : card.right);
@@ -1532,7 +1442,7 @@ function estimateDieValueForCurrentPlayer(dieValue: number) {
 function chooseLowestValueDieIndex() {
     const counts = getAreaDiceCounts();
     const p = getCurrentPlayer();
-    const scored = diceResults.map((v, idx) => {
+    const scored = S.diceResults.map((v, idx) => {
         const areaIdx = Math.floor((v - 1) / 2);
         let score = estimateDieValueForCurrentPlayer(v);
         if (getEffectiveEffectId(p, areaIdx) === 'shadow' && counts[areaIdx] === 1) score -= 5;
@@ -1545,7 +1455,7 @@ function chooseLowestValueDieIndex() {
 function chooseExpertFateDiceIndices() {
     const p = getCurrentPlayer();
     const counts = getAreaDiceCounts();
-    const scored = diceResults.map((v, idx) => ({
+    const scored = S.diceResults.map((v, idx) => ({
         idx,
         areaIdx: Math.floor((v - 1) / 2),
         score: estimateDieValueForCurrentPlayer(v),
@@ -1577,7 +1487,7 @@ function chooseExpertFateDiceIndices() {
 function chooseExpertFrostDieIndex() {
     const p = getCurrentPlayer();
     const counts = getAreaDiceCounts();
-    const scored = diceResults.map((v, idx) => {
+    const scored = S.diceResults.map((v, idx) => {
         const areaIdx = Math.floor((v - 1) / 2);
         let score = estimateDieValueForCurrentPlayer(v);
         if (getEffectiveEffectId(p, areaIdx) === 'shadow' && counts[areaIdx] === 1) score -= 8;
@@ -1735,7 +1645,7 @@ function chooseExpertPlay() {
 
 function chooseExpertPlayCount() {
     const p = getCurrentPlayer();
-    if (inPreparationPhase) return 1;
+    if (S.inPreparationPhase) return 1;
     if (p.hand.length <= 1) return 1;
     const bestHandScore = Math.max(...p.hand.map(c => scoreCardForExpert(c)));
     const activeBrilliance = hasExpertEffect(p, 'brilliance');
@@ -1827,12 +1737,7 @@ function getExpertActivationEffectId(label: string) {
     return '';
 }
 
-function getExpertMagicCost(effectId: string) {
-    if (effectId === 'magic_bullet' || effectId === 'illusion') return 1;
-    if (effectId === 'charge' || effectId === 'reproduction' || effectId === 'shield' || effectId === 'holy_light' || effectId === 'magic_luck') return 2;
-    if (effectId === 'flare' || effectId === 'forest' || effectId === 'dodge' || effectId === 'barrier' || effectId === 'soul_snatch') return 3;
-    return 0;
-}
+const getExpertMagicCost = getActivationMagicCost;
 
 type ExpertMagicPlan = {
     planned: Record<string, number>;
@@ -1845,7 +1750,7 @@ function buildExpertMagicPlan(): ExpertMagicPlan {
     if (p.magic <= 0 || isMirageActive()) return {planned, reserved: 0};
 
     const candidates: Array<{effectId: string; cost: number; score: number; priority: number}> = [];
-    const canPlanPhase = (phase: number) => currentPhaseIndex <= phase;
+    const canPlanPhase = (phase: number) => S.currentPhaseIndex <= phase;
     const add = (effectId: string, score: number, priority = 0, uses = 1, decay = 1.15) => {
         const cost = getExpertMagicCost(effectId);
         if (cost <= 0 || score < 2.75) return;
@@ -1883,7 +1788,7 @@ function buildExpertMagicPlan(): ExpertMagicPlan {
         }
         if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'holy_light')) {
             const hpNeed = p.hp <= 7 ? 2 : 1;
-            add('holy_light', Math.max(scoreActivationForExpertRaw('聖光'), currentPhaseIndex >= 4 ? 3.2 : 1), 2, hpNeed);
+            add('holy_light', Math.max(scoreActivationForExpertRaw('聖光'), S.currentPhaseIndex >= 4 ? 3.2 : 1), 2, hpNeed);
         }
         if (p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'magic_bullet')) {
             add('magic_bullet', scoreActivationForExpertRaw('魔彈'), 3, Math.min(4, p.magic), 4.6);
@@ -1927,7 +1832,7 @@ function scoreActivationForExpert(label: string) {
     const plan = buildExpertMagicPlan();
     if ((plan.planned[effectId] || 0) > 0) return raw + 0.35;
 
-    if (currentPhaseIndex >= 5 && raw >= 3.2 && getCurrentPlayer().magic >= cost) {
+    if (S.currentPhaseIndex >= 5 && raw >= 3.2 && getCurrentPlayer().magic >= cost) {
         return Math.max(2.85, raw * 0.72);
     }
     return Math.min(raw, 2.35);
@@ -2030,7 +1935,7 @@ function scoreActivationForExpertRaw(label: string) {
     if (label.includes('冰霜')) {
         const hasShadow = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'shadow');
         if (hasShadow) return 8.6;
-        const lowest = diceResults.length > 0 ? Math.min(...diceResults.map(v => estimateDieValueForCurrentPlayer(v))) : 99;
+        const lowest = S.diceResults.length > 0 ? Math.min(...S.diceResults.map(v => estimateDieValueForCurrentPlayer(v))) : 99;
         return lowest <= 2.5 ? 4.6 : 2.4;
     }
     if (label.includes('幻象')) {
@@ -2040,123 +1945,91 @@ function scoreActivationForExpertRaw(label: string) {
     return 3;
 }
 
+/*
+ * 每個效果的中文標籤。AI 評分目前是用 label.includes('命運') 這類字串比對挑分數，
+ * 所以標籤用字必須和評分那邊一致；這張表就是那個約定的唯一寫處。
+ */
+const ACTIVATION_LABELS: Record<string, string> = {
+    fate: '命運',
+    frost: '冰霜',
+    magic_luck: '魔運',
+    illusion: '幻象幽影',
+    dodge: '閃避',
+    shield: '護盾',
+    barrier: '屏障',
+    amplify: '增幅',
+    magic_bullet: '魔彈',
+    thrust: '突刺',
+    forest: '森林',
+    charge: '充能',
+    reproduction: '再現',
+    flare: '閃光',
+    holy_light: '聖光',
+    soul_snatch: '奪魂',
+};
+
+// effectId -> 實際執行的函式。條件判斷在 engine/activations.ts，這裡只負責派工。
+const ACTIVATION_RUNNERS: Record<string, (areaIdx: number) => void> = {
+    fate: useFate,
+    frost: useFrost,
+    magic_luck: useMagicLuck,
+    illusion: useIllusion,
+    dodge: useEvasion,
+    shield: useShield,
+    barrier: useBarrier,
+    amplify: useAmplify,
+    magic_bullet: useMagicBullet,
+    thrust: useThrust,
+    forest: useForest,
+    charge: aIdx => useCharge(aIdx),
+    reproduction: useReproduction,
+    flare: useFlare,
+    holy_light: useHolyLight,
+    soul_snatch: useSoulSnatch,
+};
+
+/*
+ * 目前可發動的效果清單。
+ * 條件本體（階段、魔力門檻、每區一次、幻境封鎖…）住在 engine/activations.ts，
+ * 與模擬器共用同一份 —— 以前這裡和模擬器各有一串 90 行的 if，改一邊就會安靜走鐘。
+ */
 function getAvailableActivationsForCurrentPlayer() {
-    // Return list of "thunks" that, when called, will start an activation.
-    // Some activations will open selection modes; AI will then resolve targets in subsequent steps.
     const p = getCurrentPlayer();
-    const acts: Array<{label: string; run: () => void}> = [];
-    const mirageBlocked = isMirageActive();
+    const opp = getOpponent();
+    const options = listActivations({
+        phaseIndex: S.currentPhaseIndex,
+        player: p,
+        opponent: opp,
+        diceCount: S.diceResults.length,
+        opponentDodgeTargetCount: listOpponentDodgeTargets().length,
+        selfAttackTargetCount: listSelfAttackHitTargets().length,
+        hasAnyAttackTarget: hasAnyAttackTarget(p),
+        hasAnyThrustTarget: hasAnyThrustTarget(p),
+        hasCopyableOpponentCard: opp.activeAreaEffects.some(
+            c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId),
+        ),
+        // 幸運骰還沒處理完時，UI 會擋住其他發動（幸運只會在擲骰階段出現）
+        blockedBySelection: S.luckySelectionMode,
+    });
 
-    // Phase 1: after roll you might use Frost/Fate. (Fate function itself supports phase 1)
-    if (currentPhaseIndex === 1 && diceResults.length > 0) {
-        // Fate
-        for (let aIdx = 0; aIdx < 3; aIdx++) {
-            if (getEffectiveEffectId(p, aIdx) === 'fate' && !p.fateUsedIndices.includes(aIdx) && !luckySelectionMode) {
-                acts.push({label: `命運(區域${aIdx + 1})`, run: () => useFate(aIdx)});
-            }
-            if (getEffectiveEffectId(p, aIdx) === 'frost' && !p.frostUsedIndices.includes(aIdx) && !luckySelectionMode) {
-                acts.push({label: `冰霜(區域${aIdx + 1})`, run: () => useFrost(aIdx)});
-            }
-        }
-    }
-
-    // Phase 2: judging activations
-    if (currentPhaseIndex === 2) {
-        for (let aIdx = 0; aIdx < 3; aIdx++) {
-            const eff = getEffectiveEffectId(p, aIdx);
-            if (eff === 'fate' && !p.fateUsedIndices.includes(aIdx) && diceResults.length > 0 && !luckySelectionMode) {
-                acts.push({label: `命運(區域${aIdx + 1})`, run: () => useFate(aIdx)});
-            }
-            if (eff === 'magic_luck' && !p.magicLuckUsedIndices.includes(aIdx) && p.magic >= 2 && !mirageBlocked) {
-                acts.push({label: `魔運(區域${aIdx + 1})`, run: () => useMagicLuck(aIdx)});
-            }
-            if (p.activeAreaEffects[aIdx]?.effectId === 'illusion' && !p.illusionUsedIndices.includes(aIdx) && p.magic >= 1 && !mirageBlocked) {
-                const opp = getOpponent();
-                const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
-                if (hasCopyableCard) acts.push({label: `幻象幽影(區域${aIdx + 1})`, run: () => useIllusion(aIdx)});
-            }
-        }
-    }
-
-    // Phase 3: defense activations
-    if (currentPhaseIndex === 3) {
-        const oppTargets = listOpponentDodgeTargets();
-        for (let aIdx = 0; aIdx < 3; aIdx++) {
-            const eff = getEffectiveEffectId(p, aIdx);
-            if (eff === 'dodge' && !p.evasionUsedIndices.includes(aIdx) && p.magic >= 3 && oppTargets.length > 0 && !mirageBlocked) {
-                acts.push({label: `閃避(區域${aIdx + 1})`, run: () => useEvasion(aIdx)});
-            }
-            if (eff === 'shield' && p.magic >= 2 && !mirageBlocked) {
-                acts.push({label: `護盾(區域${aIdx + 1})`, run: () => useShield(aIdx)});
-            }
-            if (eff === 'barrier' && !p.barrierUsedIndices.includes(aIdx) && p.magic >= 3 && !mirageBlocked) {
-                acts.push({label: `屏障(區域${aIdx + 1})`, run: () => useBarrier(aIdx)});
-            }
-        }
-    }
-
-    // Phase 5: attack activations
-    if (currentPhaseIndex === 5) {
-        const selfTargets = listSelfAttackHitTargets();
-        for (let aIdx = 0; aIdx < 3; aIdx++) {
-            const eff = getEffectiveEffectId(p, aIdx);
-            if (eff === 'amplify' && !p.amplifyUsedIndices.includes(aIdx) && hasAnyAttackTarget(p)) {
-                acts.push({label: `增幅(區域${aIdx + 1})`, run: () => useAmplify(aIdx)});
-            }
-            if (eff === 'magic_bullet' && p.magic >= 1 && !mirageBlocked) {
-                acts.push({label: `魔彈(區域${aIdx + 1})`, run: () => useMagicBullet(aIdx)});
-            }
-            if (eff === 'thrust' && !p.thrustUsedIndices.includes(aIdx) && hasAnyThrustTarget(p)) {
-                acts.push({label: `突刺(區域${aIdx + 1})`, run: () => useThrust(aIdx)});
-            }
-            if (eff === 'forest' && !p.forestUsedIndices.includes(aIdx) && p.magic >= 3 && !mirageBlocked) {
-                acts.push({label: `森林(區域${aIdx + 1})`, run: () => useForest(aIdx)});
-            }
-            if (eff === 'charge' && !p.chargeUsedIndices.includes(aIdx) && p.magic >= 2 && selfTargets.length > 0 && !mirageBlocked) {
-                acts.push({label: `充能(區域${aIdx + 1})`, run: () => useCharge(aIdx)});
-            }
-            if (eff === 'reproduction' && !p.reproductionUsedIndices.includes(aIdx) && p.magic >= 2 && selfTargets.length > 0 && !mirageBlocked) {
-                acts.push({label: `再現(區域${aIdx + 1})`, run: () => useReproduction(aIdx)});
-            }
-            if (eff === 'flare' && !p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && selfTargets.length > 0 && !mirageBlocked) {
-                acts.push({label: `閃光(區域${aIdx + 1})`, run: () => useFlare(aIdx)});
-            }
-            // Holy Light / Soul Snatch (valid phases include 5)
-            if (eff === 'holy_light' && p.magic >= 2 && !mirageBlocked) {
-                acts.push({label: `聖光(區域${aIdx + 1})`, run: () => useHolyLight(aIdx)});
-            }
-            if (eff === 'soul_snatch' && p.magic >= 3 && !mirageBlocked) {
-                acts.push({label: `奪魂(區域${aIdx + 1})`, run: () => useSoulSnatch(aIdx)});
-            }
-        }
-    }
-
-    // Phase 4: damage (holy light / soul snatch are valid)
-    if (currentPhaseIndex === 4) {
-        for (let aIdx = 0; aIdx < 3; aIdx++) {
-            const eff = getEffectiveEffectId(p, aIdx);
-            if (eff === 'holy_light' && p.magic >= 2 && !mirageBlocked) {
-                acts.push({label: `聖光(區域${aIdx + 1})`, run: () => useHolyLight(aIdx)});
-            }
-            if (eff === 'soul_snatch' && p.magic >= 3 && !mirageBlocked) {
-                acts.push({label: `奪魂(區域${aIdx + 1})`, run: () => useSoulSnatch(aIdx)});
-            }
-        }
-    }
-
-    return acts;
+    return options.map(({effectId, areaIdx}) => ({
+        effectId,
+        areaIdx,
+        label: `${ACTIVATION_LABELS[effectId] ?? effectId}(區域${areaIdx + 1})`,
+        run: () => ACTIVATION_RUNNERS[effectId]?.(areaIdx),
+    }));
 }
 
 async function aiResolveSelectionModesStep() {
-    if (luckySelectionMode && diceResults.length > 0) {
+    if (S.luckySelectionMode && S.diceResults.length > 0) {
         const idx = chooseLowestValueDieIndex();
-        logAi(`${getAiName()} 移除低價值骰子 #${idx + 1}(${diceResults[idx]})`);
+        logAi(`${getAiName()} 移除低價值骰子 #${idx + 1}(${S.diceResults[idx]})`);
         await sleep(randInt(280, 500));
         removeLuckyDie(idx);
         return true;
     }
 
-    if (fateSelectionMode && diceResults.length > 0) {
+    if (S.fateSelectionMode && S.diceResults.length > 0) {
         const chosen = chooseExpertFateDiceIndices();
         logAi(`${getAiName()} 重擲 ${chosen.length} 顆低價值骰（#${chosen.map(i => i + 1).join(',')}）`);
         await sleep(randInt(280, 500));
@@ -2166,7 +2039,7 @@ async function aiResolveSelectionModesStep() {
         return true;
     }
 
-    if (evasionSelectionMode) {
+    if (S.evasionSelectionMode) {
         const targets = listOpponentDodgeTargets();
         if (targets.length > 0) {
             const t = chooseHighestAttackTarget(targets);
@@ -2175,11 +2048,11 @@ async function aiResolveSelectionModesStep() {
             targetEvasion(t.areaIdx, t.hitIdx);
             return true;
         }
-        evasionSelectionMode = false;
+        S.evasionSelectionMode = false;
         return false;
     }
 
-    if (illusionSelectionMode) {
+    if (S.illusionSelectionMode) {
         const aIdx = chooseExpertIllusionTargetArea();
         if (aIdx >= 0) {
             const name = getOpponent().activeAreaEffects[aIdx]?.effectName || '未知';
@@ -2188,19 +2061,19 @@ async function aiResolveSelectionModesStep() {
             targetIllusion(aIdx);
             return true;
         }
-        illusionSelectionMode = false;
+        S.illusionSelectionMode = false;
         return false;
     }
 
-    if (frostSelectionMode && diceResults.length > 0) {
+    if (S.frostSelectionMode && S.diceResults.length > 0) {
         const idx = chooseExpertFrostDieIndex();
-        logAi(`${getAiName()} 冰霜：捨棄最適合的骰子 #${idx + 1}(${diceResults[idx]})`);
+        logAi(`${getAiName()} 冰霜：捨棄最適合的骰子 #${idx + 1}(${S.diceResults[idx]})`);
         await sleep(randInt(280, 500));
         targetFrost(idx);
         return true;
     }
 
-    if (chargeSelectionMode) {
+    if (S.chargeSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
             const t = chooseExpertSelfAttackTarget(targets);
@@ -2209,11 +2082,11 @@ async function aiResolveSelectionModesStep() {
             useCharge(t.areaIdx, t.hitIdx);
             return true;
         }
-        chargeSelectionMode = false;
+        S.chargeSelectionMode = false;
         return false;
     }
 
-    if (reproductionSelectionMode) {
+    if (S.reproductionSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
             const t = chooseExpertSelfAttackTarget(targets);
@@ -2222,11 +2095,11 @@ async function aiResolveSelectionModesStep() {
             targetReproduction(t.areaIdx, t.hitIdx);
             return true;
         }
-        reproductionSelectionMode = false;
+        S.reproductionSelectionMode = false;
         return false;
     }
 
-    if (flareSelectionMode) {
+    if (S.flareSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
             const t = chooseExpertSelfAttackTarget(targets);
@@ -2235,7 +2108,7 @@ async function aiResolveSelectionModesStep() {
             targetFlare(t.areaIdx, t.hitIdx);
             return true;
         }
-        flareSelectionMode = false;
+        S.flareSelectionMode = false;
         return false;
     }
 
@@ -2266,7 +2139,7 @@ async function aiActivationLoopStep() {
 
 async function aiDoPlayPhase() {
     const p = getCurrentPlayer();
-    if (currentPhaseIndex !== 0) return;
+    if (S.currentPhaseIndex !== 0) return;
 
     if (p.hand.length === 0) {
         logAi(`${getAiName()} 無手牌，進入擲骰`);
@@ -2275,7 +2148,7 @@ async function aiDoPlayPhase() {
         return;
     }
 
-    const maxPlays = inPreparationPhase ? 1 : Math.min(3, p.hand.length);
+    const maxPlays = S.inPreparationPhase ? 1 : Math.min(3, p.hand.length);
     const playCount = Math.min(maxPlays, Math.max(1, chooseExpertPlayCount()));
     logAi(`${getAiName()} 出牌：規劃打出 ${playCount} 張`);
     await sleep(randInt(250, 450));
@@ -2284,15 +2157,15 @@ async function aiDoPlayPhase() {
         const choice = chooseExpertPlay();
         if (!choice) break;
         const cardName = p.hand[choice.handIdx]?.effectName || '未知';
-        selectedHandCardIndex = choice.handIdx;
+        S.selectedHandCardIndex = choice.handIdx;
         logAi(`${getAiName()} 出牌：「${cardName}」→ 區域${choice.areaIdx + 1}`);
         await sleep(randInt(260, 480));
         playToBoard(choice.areaIdx);
         await sleep(randInt(160, 300));
-        if (inPreparationPhase) break;
+        if (S.inPreparationPhase) break;
     }
 
-    if (inPreparationPhase && players[1].cardsPlayedThisTurn >= 1) {
+    if (S.inPreparationPhase && S.players[1].cardsPlayedThisTurn >= 1) {
         logAi(`${getAiName()} 準備完成：開始遊戲`);
         await sleep(randInt(240, 420));
         finishPreparationPhase();
@@ -2304,8 +2177,8 @@ async function aiDoPlayPhase() {
 }
 
 async function aiDoRollPhase() {
-    if (currentPhaseIndex !== 1) return;
-    if (diceResults.length > 0) {
+    if (S.currentPhaseIndex !== 1) return;
+    if (S.diceResults.length > 0) {
         await sleep(randInt(160, 280));
         nextPhase();
         return;
@@ -2323,10 +2196,10 @@ async function aiDoRollPhase() {
 }
 
 async function aiDoBuyPhase() {
-    if (currentPhaseIndex !== 6) return;
+    if (S.currentPhaseIndex !== 6) return;
     const p = getCurrentPlayer();
 
-    if (deck.length > 0 && buyDeckDrawCount < 1) {
+    if (S.deck.length > 0 && S.buyDeckDrawCount < 1) {
         logAi(`${getAiName()} 購買：先抽免費牌`);
         await sleep(randInt(240, 420));
         buyFromDeck();
@@ -2334,9 +2207,9 @@ async function aiDoBuyPhase() {
     }
 
     const actions: Array<{label: string; score: number; run: () => void}> = [];
-    const nextDrawIndex = buyDeckDrawCount + 1;
+    const nextDrawIndex = S.buyDeckDrawCount + 1;
     const nextDrawCost = getDeckDrawCost(nextDrawIndex);
-    if (deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
+    if (S.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
         actions.push({
             label: `抽牌庫(-${nextDrawCost}金)`,
             score: 5.8 - nextDrawCost * 1.1 + Math.random() * 0.1,
@@ -2345,7 +2218,7 @@ async function aiDoBuyPhase() {
     }
 
     ([0, 1, 2] as const).forEach((idx) => {
-        const c = market[idx];
+        const c = S.market[idx];
         if (!c) return;
         const price = getMarketPrice(idx);
         if (p.gold < price) return;
@@ -2373,7 +2246,7 @@ async function aiDoBuyPhase() {
 async function runComputerTurnLoop() {
     if (computerBusy) return;
     if (!isComputerTurnNow()) return;
-    if (winner) return;
+    if (S.winner) return;
 
     computerBusy = true;
     try {
@@ -2381,7 +2254,7 @@ async function runComputerTurnLoop() {
         // Hard cap to avoid infinite loops.
         for (let step = 0; step < 200; step++) {
             if (!isComputerTurnNow()) break;
-            if (winner) break;
+            if (S.winner) break;
 
             // Resolve any pending selection mode first
             const didResolve = await aiResolveSelectionModesStep();
@@ -2398,9 +2271,9 @@ async function runComputerTurnLoop() {
             }
 
             // Phase default actions
-            if (inPreparationPhase) {
+            if (S.inPreparationPhase) {
                 // only player 1 acts in prep phase; if computer is player 0 in CvP, they will just wait.
-                if (currentPlayerIndex === 1) {
+                if (S.currentPlayerIndex === 1) {
                     await aiDoPlayPhase();
                     continue;
                 }
@@ -2408,41 +2281,41 @@ async function runComputerTurnLoop() {
                 break;
             }
 
-            if (currentPhaseIndex === 0) {
+            if (S.currentPhaseIndex === 0) {
                 await aiDoPlayPhase();
                 continue;
             }
-            if (currentPhaseIndex === 1) {
+            if (S.currentPhaseIndex === 1) {
                 await aiDoRollPhase();
                 await sleep(randInt(150, 350));
                 // lucky selection will be resolved in next loop
                 continue;
             }
-            if (currentPhaseIndex === 2) {
+            if (S.currentPhaseIndex === 2) {
                 logAi(`${getAiName()} 結束判定階段`);
                 await sleep(randInt(250, 450));
                 nextPhase();
                 continue;
             }
-            if (currentPhaseIndex === 3) {
+            if (S.currentPhaseIndex === 3) {
                 logAi(`${getAiName()} 結束防禦階段`);
                 await sleep(randInt(250, 450));
                 nextPhase();
                 continue;
             }
-            if (currentPhaseIndex === 4) {
+            if (S.currentPhaseIndex === 4) {
                 logAi(`${getAiName()} 結束傷害階段`);
                 await sleep(randInt(250, 450));
                 nextPhase();
                 continue;
             }
-            if (currentPhaseIndex === 5) {
+            if (S.currentPhaseIndex === 5) {
                 logAi(`${getAiName()} 結束攻擊階段`);
                 await sleep(randInt(250, 450));
                 nextPhase();
                 continue;
             }
-            if (currentPhaseIndex === 6) {
+            if (S.currentPhaseIndex === 6) {
                 await aiDoBuyPhase();
                 await sleep(randInt(150, 350));
                 continue;
@@ -2460,47 +2333,32 @@ async function runComputerTurnLoop() {
 
 function initGame() {
   
-  deck = [];
-  let idCounter = 0;
-
-  // Cards are now defined in a fixed, editable table: src/cards.ts
-  CARD_DEFS.forEach((def) => {
-    deck.push({
-      id: `card_${idCounter++}`,
-      left: def.left,
-      right: def.right,
-      effectId: def.effectId,
-      effectName: def.name,
-      effectDesc: def.desc,
-      // per requirement: only show effect name
-      name: def.name,
-    } satisfies GameCard);
-  });
-
-  // Shuffle the final deck
-  deck = deck.sort(() => Math.random() - 0.5);
+  // 牌庫組成與洗牌都在 engine/deck.ts；
+  // 這裡原本用 sort(() => Math.random() - 0.5)，那不是均勻洗牌
+  // （比較函式不一致，某些排列會明顯偏多），已換成 Fisher-Yates。
+  S.deck = shuffled(buildDeck());
 
   // Deal initial hands
   // 先手 3 張、後手 4 張
-  players[0].hand = [deck.pop(), deck.pop(), deck.pop()];
-  players[1].hand = [deck.pop(), deck.pop(), deck.pop(), deck.pop()];
+  S.players[0].hand = [S.deck.pop(), S.deck.pop(), S.deck.pop()];
+  S.players[1].hand = [S.deck.pop(), S.deck.pop(), S.deck.pop(), S.deck.pop()];
 
   // Enter one-time Preparation Phase (後手先手動打出 1 張)
-  inPreparationPhase = true;
-  currentPlayerIndex = 1;
-  currentPhaseIndex = 0; // reuse play-to-board UI
-  selectedHandCardIndex = -1;
-  diceResults = [];
+  S.inPreparationPhase = true;
+  S.currentPlayerIndex = 1;
+  S.currentPhaseIndex = 0; // reuse play-to-board UI
+  S.selectedHandCardIndex = -1;
+  S.diceResults = [];
   // Mobile：出牌階段時手牌抽屜自動彈出
   // 並預設切回手牌（避免停留在上一回合的市場 tab）
   mobileDockTab = 'hand';
   handDrawerOpen = isMobileLayout();
-  players[0].cardsPlayedThisTurn = 0;
-  players[1].cardsPlayedThisTurn = 0;
-  phaseHint = '後手先出1張牌';
+  S.players[0].cardsPlayedThisTurn = 0;
+  S.players[1].cardsPlayedThisTurn = 0;
+  S.phaseHint = '後手先出1張牌';
 
   // Setup global market
-  market = [null, null, null];
+  S.market = [null, null, null];
   refillMarket();
 
   render();
@@ -2509,15 +2367,15 @@ function initGame() {
 // --- Logic functions ---
 
 function getOpponentIndex() {
-  return 1 - currentPlayerIndex;
+  return 1 - S.currentPlayerIndex;
 }
 
 function getCurrentPlayer() {
-  return players[currentPlayerIndex];
+  return S.players[S.currentPlayerIndex];
 }
 
 function getOpponent() {
-  return players[getOpponentIndex()];
+  return S.players[getOpponentIndex()];
 }
 
 // 主要動作按鈕被擋住的原因；沒被擋就回 null。
@@ -2528,11 +2386,11 @@ function getOpponent() {
 function getActionBlockReason(): string | null {
     // 準備階段的「開始」有自己的啟用條件（後手出滿 1 張），
     // 這裡不要插手，否則會顯示錯的原因。
-    if (inPreparationPhase) return null;
-    if (luckySelectionMode) return '先處理幸運骰';
+    if (S.inPreparationPhase) return null;
+    if (S.luckySelectionMode) return '先處理幸運骰';
     const p = getCurrentPlayer();
-    if (currentPhaseIndex === 0 && p.hand.length > 0 && p.cardsPlayedThisTurn === 0) return '至少出 1 張';
-    if (currentPhaseIndex === 6 && deck.length > 0 && buyDeckDrawCount < 1) return '先抽免費牌';
+    if (S.currentPhaseIndex === 0 && p.hand.length > 0 && p.cardsPlayedThisTurn === 0) return '至少出 1 張';
+    if (S.currentPhaseIndex === 6 && S.deck.length > 0 && S.buyDeckDrawCount < 1) return '先抽免費牌';
     return null;
 }
 
@@ -2541,14 +2399,14 @@ function nextPhase() {
   if (now < phaseAdvanceLockUntil) return;
   phaseAdvanceLockUntil = now + 250;
 
-  if (winner) return;
-  if (luckySelectionMode) return;
+  if (S.winner) return;
+  if (S.luckySelectionMode) return;
   const p = getCurrentPlayer();
 
-  if (currentPhaseIndex === 0) { // Play Phase
+  if (S.currentPhaseIndex === 0) { // Play Phase
       // Rule: Hand >= 1 -> Must play at least 1
       if (p.hand.length > 0 && p.cardsPlayedThisTurn === 0) {
-          phaseHint = '至少出 1 張';
+          S.phaseHint = '至少出 1 張';
           render();
           return;
       }
@@ -2556,59 +2414,59 @@ function nextPhase() {
        // 只有「回合一開始就沒有手牌」才算跳過出牌階段（擲骰階段固定投 5 顆）。
        // 把手牌打完不算 —— 那是正常出過牌，訊息會誤導。
        if (p.hand.length === 0 && p.cardsPlayedThisTurn === 0) {
-           skippedPlayBecauseNoHand = true;
-           phaseHint = '沒有手牌，直接進行擲骰';
+           S.skippedPlayBecauseNoHand = true;
+           S.phaseHint = '沒有手牌，直接進行擲骰';
        } else {
-           skippedPlayBecauseNoHand = false;
+           S.skippedPlayBecauseNoHand = false;
        }
 
-      currentPhaseIndex = 1;
+      S.currentPhaseIndex = 1;
       // 手機版 UX：離開出牌階段就先收起手牌抽屜
       handDrawerOpen = false;
-      if (!skippedPlayBecauseNoHand) {
-          phaseHint = '請擲骰';
+      if (!S.skippedPlayBecauseNoHand) {
+          S.phaseHint = '請擲骰';
       }
-  } else if (currentPhaseIndex === 1) { // Roll Phase
-      if (diceResults.length === 0) {
-          phaseHint = '必須先擲骰';
+  } else if (S.currentPhaseIndex === 1) { // Roll Phase
+      if (S.diceResults.length === 0) {
+          S.phaseHint = '必須先擲骰';
           render();
           return;
       }
-      currentPhaseIndex = 2;
-      phaseHint = '判定中';
+      S.currentPhaseIndex = 2;
+      S.phaseHint = '判定中';
       handleJudging();
-  } else if (currentPhaseIndex === 2) { // Judging
-      currentPhaseIndex = 3;
-      if (currentPlayerIndex === 0 && firstPlayerFirstTurn) {
-          phaseHint = '先手首回合跳過';
+  } else if (S.currentPhaseIndex === 2) { // Judging
+      S.currentPhaseIndex = 3;
+      if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) {
+          S.phaseHint = '先手首回合跳過';
       } else {
-          phaseHint = '防禦對手攻擊';
+          S.phaseHint = '防禦對手攻擊';
       }
       handleDefensePhaseStart();
-  } else if (currentPhaseIndex === 3) { // Defense
-      currentPhaseIndex = 4;
-      if (currentPlayerIndex === 0 && firstPlayerFirstTurn) {
-          phaseHint = '先手首回合跳過';
+  } else if (S.currentPhaseIndex === 3) { // Defense
+      S.currentPhaseIndex = 4;
+      if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) {
+          S.phaseHint = '先手首回合跳過';
       } else {
-          phaseHint = '結算傷害';
+          S.phaseHint = '結算傷害';
       }
       handleDamagePhase();
-  } else if (currentPhaseIndex === 4) { // Damage
-      currentPhaseIndex = 5;
-      phaseHint = '攻擊效果發動';
+  } else if (S.currentPhaseIndex === 4) { // Damage
+      S.currentPhaseIndex = 5;
+      S.phaseHint = '攻擊效果發動';
       handleAttackPhaseStart();
-  } else if (currentPhaseIndex === 5) { // Attack
+  } else if (S.currentPhaseIndex === 5) { // Attack
       // Store current attacks into queue
       p.attackQueue = p.currentAttacks.map(h => [...h]);
       p.piercingQueue = p.piercingAttacks.map(h => [...h]);
-      currentPhaseIndex = 6;
-      phaseHint = '購買階段';
+      S.currentPhaseIndex = 6;
+      S.phaseHint = '購買階段';
       handleBuyPhase();
-  } else if (currentPhaseIndex === 6) { // Buy
+  } else if (S.currentPhaseIndex === 6) { // Buy
       // 必須先從牌庫抽第 1 張 (0 金)
       // 若牌庫已空：取消「必抽 1 張免費卡」限制，避免卡關
-      if (deck.length > 0 && buyDeckDrawCount < 1) {
-          phaseHint = '先抽免費牌';
+      if (S.deck.length > 0 && S.buyDeckDrawCount < 1) {
+          S.phaseHint = '先抽免費牌';
           render();
           return;
       }
@@ -2621,58 +2479,58 @@ function nextPhase() {
       p.gold = 0;
       p.defense = 0;
       
-      currentPlayerIndex = 1 - currentPlayerIndex;
-      currentPhaseIndex = 0;
-      phaseHint = players[currentPlayerIndex].hand.length === 0
+      S.currentPlayerIndex = 1 - S.currentPlayerIndex;
+      S.currentPhaseIndex = 0;
+      S.phaseHint = S.players[S.currentPlayerIndex].hand.length === 0
           ? '沒有手牌，直接進行擲骰'
           : '選牌打出';
-      diceResults = [];
-      skippedPlayBecauseNoHand = false;
+      S.diceResults = [];
+      S.skippedPlayBecauseNoHand = false;
       // Mobile：進入出牌階段時手牌抽屜自動彈出
       // 並預設切回手牌（避免停留在上一回合的市場 tab）
       mobileDockTab = 'hand';
       handDrawerOpen = isMobileLayout();
-      players[currentPlayerIndex].cardsPlayedThisTurn = 0;
-      players[currentPlayerIndex].chargeUsedIndices = [];
-      players[currentPlayerIndex].amplifyUsedIndices = [];
-      players[currentPlayerIndex].fateUsedIndices = [];
-      players[currentPlayerIndex].evasionUsedIndices = [];
-      players[currentPlayerIndex].reproductionUsedIndices = [];
-      players[currentPlayerIndex].flareUsedIndices = [];
-      players[currentPlayerIndex].magicLuckUsedIndices = [];
-      players[currentPlayerIndex].illusionUsedIndices = [];
-      players[currentPlayerIndex].illusionCopiedEffectIds = [null, null, null];
-      players[currentPlayerIndex].thrustUsedIndices = [];
-      players[currentPlayerIndex].barrierUsedIndices = [];
-      players[currentPlayerIndex].forestUsedIndices = [];
-      players[currentPlayerIndex].frostUsedIndices = [];
-      players[currentPlayerIndex].magicSpentInJudging = 0;
-      players[currentPlayerIndex].extraFrostAttacks = [[], [], []];
-      players[currentPlayerIndex].contractTriggeredAreaIdx = -1;
-      players[currentPlayerIndex].turnBaseStats = { sums: [0, 0, 0], defense: [0, 0, 0], magic: [0, 0, 0], gold: [0, 0, 0] };
-      players[currentPlayerIndex].breakthroughApplied = false;
-      players[currentPlayerIndex].currentAttacks = [[0], [0], [0]];
-      players[currentPlayerIndex].piercingAttacks = [[], [], []];
-      players[currentPlayerIndex].magic = 0;
-      players[currentPlayerIndex].gold = 0;
-      players[currentPlayerIndex].defense = 0;
+      S.players[S.currentPlayerIndex].cardsPlayedThisTurn = 0;
+      S.players[S.currentPlayerIndex].chargeUsedIndices = [];
+      S.players[S.currentPlayerIndex].amplifyUsedIndices = [];
+      S.players[S.currentPlayerIndex].fateUsedIndices = [];
+      S.players[S.currentPlayerIndex].evasionUsedIndices = [];
+      S.players[S.currentPlayerIndex].reproductionUsedIndices = [];
+      S.players[S.currentPlayerIndex].flareUsedIndices = [];
+      S.players[S.currentPlayerIndex].magicLuckUsedIndices = [];
+      S.players[S.currentPlayerIndex].illusionUsedIndices = [];
+      S.players[S.currentPlayerIndex].illusionCopiedEffectIds = [null, null, null];
+      S.players[S.currentPlayerIndex].thrustUsedIndices = [];
+      S.players[S.currentPlayerIndex].barrierUsedIndices = [];
+      S.players[S.currentPlayerIndex].forestUsedIndices = [];
+      S.players[S.currentPlayerIndex].frostUsedIndices = [];
+      S.players[S.currentPlayerIndex].magicSpentInJudging = 0;
+      S.players[S.currentPlayerIndex].extraFrostAttacks = [[], [], []];
+      S.players[S.currentPlayerIndex].contractTriggeredAreaIdx = -1;
+      S.players[S.currentPlayerIndex].turnBaseStats = { sums: [0, 0, 0], defense: [0, 0, 0], magic: [0, 0, 0], gold: [0, 0, 0] };
+      S.players[S.currentPlayerIndex].breakthroughApplied = false;
+      S.players[S.currentPlayerIndex].currentAttacks = [[0], [0], [0]];
+      S.players[S.currentPlayerIndex].piercingAttacks = [[], [], []];
+      S.players[S.currentPlayerIndex].magic = 0;
+      S.players[S.currentPlayerIndex].gold = 0;
+      S.players[S.currentPlayerIndex].defense = 0;
       
-      fateSelectionMode = false;
-      fateSelectedDiceIndices = [];
-      fateSourceAreaIdx = -1;
-      evasionSelectionMode = false;
-      evasionSourceAreaIdx = -1;
-      chargeSelectionMode = false;
-      chargeSourceAreaIdx = -1;
-      reproductionSelectionMode = false;
-      reproductionSourceAreaIdx = -1;
-      flareSelectionMode = false;
-      flareSourceAreaIdx = -1;
-      frostSelectionMode = false;
-      frostSourceAreaIdx = -1;
+      S.fateSelectionMode = false;
+      S.fateSelectedDiceIndices = [];
+      S.fateSourceAreaIdx = -1;
+      S.evasionSelectionMode = false;
+      S.evasionSourceAreaIdx = -1;
+      S.chargeSelectionMode = false;
+      S.chargeSourceAreaIdx = -1;
+      S.reproductionSelectionMode = false;
+      S.reproductionSourceAreaIdx = -1;
+      S.flareSelectionMode = false;
+      S.flareSourceAreaIdx = -1;
+      S.frostSelectionMode = false;
+      S.frostSourceAreaIdx = -1;
       
-      if (currentPlayerIndex === 0) {
-          firstPlayerFirstTurn = false;
+      if (S.currentPlayerIndex === 0) {
+          S.firstPlayerFirstTurn = false;
       }
   }
 
@@ -2680,21 +2538,12 @@ function nextPhase() {
 }
 
 function isMirageActive() {
-    return players.some(p => p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'mirage'));
-}
-
-function getEffectiveEffectId(p, aIdx) {
-    const card = p.activeAreaEffects[aIdx];
-    if (!card) return null;
-    if (card.effectId === 'illusion') {
-        return p.illusionCopiedEffectIds[aIdx] || 'illusion';
-    }
-    return card.effectId;
+    return isMirageActiveFor(S.players);
 }
 
 function handleJudging() {
     const p = getCurrentPlayer();
-    const pIdx = currentPlayerIndex;
+    const pIdx = S.currentPlayerIndex;
     p.magic = 0;
     p.gold = 0;
     p.defense = 0;
@@ -2705,7 +2554,7 @@ function handleJudging() {
     const areaGold = [0, 0, 0];
 
     const diceCountsPerArea = [0, 0, 0];
-    diceResults.forEach(val => {
+    S.diceResults.forEach(val => {
         const areaIdx = Math.floor((val - 1) / 2);
         diceCountsPerArea[areaIdx]++;
         const isLeft = (val % 2 !== 0); 
@@ -2851,7 +2700,7 @@ function handleDefensePhaseStart() {
     const p = getCurrentPlayer();
     const opp = getOpponent();
 
-    if (currentPlayerIndex === 0 && firstPlayerFirstTurn) {
+    if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) {
         addLog('先手第一回合跳過防禦與傷害階段');
         return;
     }
@@ -2867,7 +2716,7 @@ function handleDamagePhase() {
     const p = getCurrentPlayer();
     const opp = getOpponent();
 
-    if (currentPlayerIndex === 0 && firstPlayerFirstTurn) {
+    if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) {
         return;
     }
 
@@ -2922,7 +2771,7 @@ function handleDamagePhase() {
     }
 
     p.hp -= totalDamage;
-    phaseHint = `受傷 ${totalDamage}`;
+    S.phaseHint = `受傷 ${totalDamage}`;
     if (totalDamage === 0) {
         addLog(`完美防禦！未受到任何傷害`);
     } else {
@@ -2977,7 +2826,7 @@ function handleDamagePhase() {
     opp.piercingAttacks = [[], [], []];
 
     if (p.hp <= 0) {
-        winner = opp.name;
+        S.winner = opp.name;
         winModalDismissed = false;
     }
 }
@@ -2990,7 +2839,7 @@ function handleAttackPhaseStart() {
 }
 
 function useEvasion(areaIdx) {
-    if (currentPhaseIndex !== 3) return; // Defense Phase
+    if (S.currentPhaseIndex !== 3) return; // Defense Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3004,9 +2853,9 @@ function useEvasion(areaIdx) {
             return;
         }
         if (p.magic >= 3) {
-            evasionSelectionMode = !evasionSelectionMode;
-            evasionSourceAreaIdx = areaIdx;
-            if (evasionSelectionMode) {
+            S.evasionSelectionMode = !S.evasionSelectionMode;
+            S.evasionSourceAreaIdx = areaIdx;
+            if (S.evasionSelectionMode) {
                 addLog('閃避已啟動，請點擊對手的一個攻擊徽章');
             }
             render();
@@ -3017,7 +2866,7 @@ function useEvasion(areaIdx) {
 }
 
 function targetEvasion(areaIdx, hitIdx) {
-    if (!evasionSelectionMode) return;
+    if (!S.evasionSelectionMode) return;
     const p = getCurrentPlayer();
     const opp = getOpponent();
 
@@ -3027,18 +2876,18 @@ function targetEvasion(areaIdx, hitIdx) {
             p.magic -= 3;
             opp.attackQueue[areaIdx].splice(hitIdx, 1);
             
-            if (evasionSourceAreaIdx !== -1) {
-                p.evasionUsedIndices.push(evasionSourceAreaIdx);
+            if (S.evasionSourceAreaIdx !== -1) {
+                p.evasionUsedIndices.push(S.evasionSourceAreaIdx);
             }
             
-            evasionSelectionMode = false;
-            evasionSourceAreaIdx = -1;
+            S.evasionSelectionMode = false;
+            S.evasionSourceAreaIdx = -1;
             addLog('閃避成功！消耗 3 點魔力已無視該次攻擊');
             render();
         } else {
             showToast('魔力不足 (需要 3 點)');
-            evasionSelectionMode = false;
-            evasionSourceAreaIdx = -1;
+            S.evasionSelectionMode = false;
+            S.evasionSourceAreaIdx = -1;
             render();
         }
     } else {
@@ -3047,7 +2896,7 @@ function targetEvasion(areaIdx, hitIdx) {
 }
 
 function useShield(areaIdx) {
-    if (currentPhaseIndex !== 3) return; // Defense Phase
+    if (S.currentPhaseIndex !== 3) return; // Defense Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3068,7 +2917,7 @@ function useShield(areaIdx) {
 }
 
 function useMagicLuck(areaIdx) {
-    if (currentPhaseIndex !== 2) return; // Judging Phase
+    if (S.currentPhaseIndex !== 2) return; // Judging Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3085,7 +2934,7 @@ function useMagicLuck(areaIdx) {
             p.magic -= 2;
             p.magicSpentInJudging += 2;
             const newVal = Math.floor(Math.random() * 6) + 1;
-            diceResults.push(newVal);
+            S.diceResults.push(newVal);
             p.magicLuckUsedIndices.push(areaIdx);
             addLog(`${p.name} 使用了「魔運」，消耗 2 點魔力額外投擲一顆骰子：${newVal}`);
             handleJudging(); // Re-calculate Gale, Shadow, Brilliance, etc.
@@ -3097,7 +2946,7 @@ function useMagicLuck(areaIdx) {
 }
 
 function useIllusion(areaIdx) {
-    if (currentPhaseIndex !== 2) return; // Judging Phase
+    if (S.currentPhaseIndex !== 2) return; // Judging Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3118,8 +2967,8 @@ function useIllusion(areaIdx) {
         }
 
         if (p.magic >= 1) {
-            illusionSelectionMode = true;
-            illusionSourceAreaIdx = areaIdx;
+            S.illusionSelectionMode = true;
+            S.illusionSourceAreaIdx = areaIdx;
             addLog(`${p.name} 啟動「幻象幽影」，請選擇對手的一張招式卡複製`);
             render();
         } else {
@@ -3129,7 +2978,7 @@ function useIllusion(areaIdx) {
 }
 
 function targetIllusion(oppAreaIdx) {
-    if (!illusionSelectionMode) return;
+    if (!S.illusionSelectionMode) return;
     const p = getCurrentPlayer();
     const opp = getOpponent();
     const targetCard = opp.activeAreaEffects[oppAreaIdx];
@@ -3146,20 +2995,20 @@ function targetIllusion(oppAreaIdx) {
 
     p.magic -= 1;
     p.magicSpentInJudging += 1;
-    p.illusionUsedIndices.push(illusionSourceAreaIdx);
-    p.illusionCopiedEffectIds[illusionSourceAreaIdx] = targetCard.effectId;
+    p.illusionUsedIndices.push(S.illusionSourceAreaIdx);
+    p.illusionCopiedEffectIds[S.illusionSourceAreaIdx] = targetCard.effectId;
     
     addLog(`${p.name} 使用「幻象幽影」複製了對手的「${targetCard.effectName}」！`);
     
-    illusionSelectionMode = false;
-    illusionSourceAreaIdx = -1;
+    S.illusionSelectionMode = false;
+    S.illusionSourceAreaIdx = -1;
     
     handleJudging(); // Recalculate with new effect
     render();
 }
 
 function useAmplify(areaIdx) {
-    if (currentPhaseIndex !== 5) return;
+    if (S.currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     const card = p.activeAreaEffects[areaIdx];
 
@@ -3170,7 +3019,7 @@ function useAmplify(areaIdx) {
         }
         // No attacks => cannot meaningfully trigger.
         if (!hasAnyAttackTarget(p)) {
-            phaseHint = '沒有可強化的攻擊';
+            S.phaseHint = '沒有可強化的攻擊';
             render();
             return;
         }
@@ -3184,7 +3033,7 @@ function useAmplify(areaIdx) {
 }
 
 function useReproduction(areaIdx) {
-    if (currentPhaseIndex !== 5) return;
+    if (S.currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3198,11 +3047,11 @@ function useReproduction(areaIdx) {
             return;
         }
         if (p.magic >= 2) {
-            reproductionSelectionMode = !reproductionSelectionMode;
-            reproductionSourceAreaIdx = areaIdx;
-            chargeSelectionMode = false;
-            evasionSelectionMode = false;
-            if (reproductionSelectionMode) {
+            S.reproductionSelectionMode = !S.reproductionSelectionMode;
+            S.reproductionSourceAreaIdx = areaIdx;
+            S.chargeSelectionMode = false;
+            S.evasionSelectionMode = false;
+            if (S.reproductionSelectionMode) {
                 addLog('再現已啟動，請點擊自己的一個攻擊徽章');
             }
             render();
@@ -3213,7 +3062,7 @@ function useReproduction(areaIdx) {
 }
 
 function useFlare(areaIdx) {
-    if (currentPhaseIndex !== 5) return;
+    if (S.currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3228,18 +3077,18 @@ function useFlare(areaIdx) {
         }
         // No attacks => there is no selectable target badge, so don't enter selection mode.
         if (!hasAnyAttackTarget(p)) {
-            phaseHint = '沒有可翻倍的攻擊';
+            S.phaseHint = '沒有可翻倍的攻擊';
             render();
             return;
         }
         if (p.magic >= 3) {
-            flareSelectionMode = !flareSelectionMode;
-            flareSourceAreaIdx = areaIdx;
+            S.flareSelectionMode = !S.flareSelectionMode;
+            S.flareSourceAreaIdx = areaIdx;
             // Cancel other selections
-            chargeSelectionMode = false;
-            evasionSelectionMode = false;
-            reproductionSelectionMode = false;
-            if (flareSelectionMode) {
+            S.chargeSelectionMode = false;
+            S.evasionSelectionMode = false;
+            S.reproductionSelectionMode = false;
+            if (S.flareSelectionMode) {
                 addLog('閃光已啟動，請點擊自己的一個攻擊徽章');
             }
             render();
@@ -3250,21 +3099,21 @@ function useFlare(areaIdx) {
 }
 
 function targetFlare(targetAreaIdx, atkIdx) {
-    if (!flareSelectionMode) return;
+    if (!S.flareSelectionMode) return;
     const p = getCurrentPlayer();
     
     if (p.magic < 3) {
         showToast('魔力不足 (需要 3 點)');
-        flareSelectionMode = false;
-        flareSourceAreaIdx = -1;
+        S.flareSelectionMode = false;
+        S.flareSourceAreaIdx = -1;
         render();
         return;
     }
     
     // Safety check: index out of bounds or negative
     if (!p.currentAttacks[targetAreaIdx] || atkIdx >= p.currentAttacks[targetAreaIdx].length) {
-        flareSelectionMode = false;
-        flareSourceAreaIdx = -1;
+        S.flareSelectionMode = false;
+        S.flareSourceAreaIdx = -1;
         render();
         return;
     }
@@ -3274,13 +3123,13 @@ function targetFlare(targetAreaIdx, atkIdx) {
         const newVal = atkVal * 2;
         p.currentAttacks[targetAreaIdx][atkIdx] = newVal;
         p.magic -= 3;
-        if (flareSourceAreaIdx !== -1) {
-            p.flareUsedIndices.push(flareSourceAreaIdx);
+        if (S.flareSourceAreaIdx !== -1) {
+            p.flareUsedIndices.push(S.flareSourceAreaIdx);
         }
         
         addLog(`${p.name} 使用了「閃光」，使強度從 ${atkVal} 翻倍為 ${newVal}`);
-        flareSelectionMode = false;
-        flareSourceAreaIdx = -1;
+        S.flareSelectionMode = false;
+        S.flareSourceAreaIdx = -1;
         render();
     } else {
         showToast('只能對大於 0 的攻擊點數使用');
@@ -3288,7 +3137,7 @@ function targetFlare(targetAreaIdx, atkIdx) {
 }
 
 function useThrust(areaIdx) {
-    if (currentPhaseIndex !== 5) return;
+    if (S.currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     const card = p.activeAreaEffects[areaIdx];
 
@@ -3318,18 +3167,18 @@ function useThrust(areaIdx) {
     }
 }
 
-function hasAnyThrustTarget(p: (typeof players)[number]) {
+function hasAnyThrustTarget(p: PlayerState) {
     // Thrust only affects normal attacks with value 1~2
     return p.currentAttacks.some(areaAtks => areaAtks.some(v => v > 0 && v <= 2));
 }
 
-function hasAnyAttackTarget(p: (typeof players)[number]) {
+function hasAnyAttackTarget(p: PlayerState) {
     // Used by effects that require an existing normal attack hit (value > 0)
     return p.currentAttacks.some(areaAtks => areaAtks.some(v => v > 0));
 }
 
 function useForest(areaIdx) {
-    if (currentPhaseIndex !== 5) return;
+    if (S.currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3364,7 +3213,7 @@ function useForest(areaIdx) {
 }
 
 function useFrost(areaIdx) {
-    if (currentPhaseIndex !== 1) return; // Roll Phase
+    if (S.currentPhaseIndex !== 1) return; // Roll Phase
     const p = getCurrentPlayer();
     const card = p.activeAreaEffects[areaIdx];
 
@@ -3373,18 +3222,18 @@ function useFrost(areaIdx) {
             showToast('這張冰霜卡本回合已使用過');
             return;
         }
-        if (diceResults.length === 0) {
+        if (S.diceResults.length === 0) {
             showToast('請先擲骰後再使用冰霜');
             return;
         }
         
-        frostSelectionMode = !frostSelectionMode;
-        frostSourceAreaIdx = areaIdx;
+        S.frostSelectionMode = !S.frostSelectionMode;
+        S.frostSourceAreaIdx = areaIdx;
         
         // Cancel other modes
-        fateSelectionMode = false;
+        S.fateSelectionMode = false;
         
-        if (frostSelectionMode) {
+        if (S.frostSelectionMode) {
             addLog('冰霜已啟動，請點擊一個骰子進行捨棄');
         }
         render();
@@ -3392,33 +3241,33 @@ function useFrost(areaIdx) {
 }
 
 function targetFrost(dieIdx) {
-    if (!frostSelectionMode) return;
+    if (!S.frostSelectionMode) return;
     const p = getCurrentPlayer();
     
     // Remove the die
-    const removedVal = diceResults.splice(dieIdx, 1)[0];
+    const removedVal = S.diceResults.splice(dieIdx, 1)[0];
     
     // Generate random extra attack 1-3
     const extraAtk = Math.floor(Math.random() * 3) + 1;
     
     if (!p.extraFrostAttacks) p.extraFrostAttacks = [[], [], []];
-    p.extraFrostAttacks[frostSourceAreaIdx].push(extraAtk);
+    p.extraFrostAttacks[S.frostSourceAreaIdx].push(extraAtk);
     
     // Immediately show in UI (currentPhaseIndex 1)
-    p.currentAttacks[frostSourceAreaIdx].push(extraAtk);
+    p.currentAttacks[S.frostSourceAreaIdx].push(extraAtk);
     
-    p.frostUsedIndices.push(frostSourceAreaIdx);
+    p.frostUsedIndices.push(S.frostSourceAreaIdx);
     
-    addLog(`${p.name} 使用了「冰霜」，捨棄了骰子 ${removedVal}，並在區域 ${frostSourceAreaIdx + 1} 獲得了強度為 ${extraAtk} 的額外攻擊`);
+    addLog(`${p.name} 使用了「冰霜」，捨棄了骰子 ${removedVal}，並在區域 ${S.frostSourceAreaIdx + 1} 獲得了強度為 ${extraAtk} 的額外攻擊`);
     
-    frostSelectionMode = false;
-    frostSourceAreaIdx = -1;
+    S.frostSelectionMode = false;
+    S.frostSourceAreaIdx = -1;
     render();
 }
 
 function useHolyLight(areaIdx) {
     const validPhases = [2, 3, 4, 5];
-    if (!validPhases.includes(currentPhaseIndex)) return;
+    if (!validPhases.includes(S.currentPhaseIndex)) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3429,7 +3278,7 @@ function useHolyLight(areaIdx) {
     if (card && getEffectiveEffectId(p, areaIdx) === 'holy_light') {
         if (p.magic >= 2) {
             p.magic -= 2;
-            if (currentPhaseIndex === 2) p.magicSpentInJudging += 2;
+            if (S.currentPhaseIndex === 2) p.magicSpentInJudging += 2;
             p.hp += 1;
             addLog(`${p.name} 使用了「聖光」，消耗 2 點魔力回復 1 點生命`);
             render();
@@ -3441,7 +3290,7 @@ function useHolyLight(areaIdx) {
 
 function useSoulSnatch(areaIdx) {
     const validPhases = [2, 3, 4, 5];
-    if (!validPhases.includes(currentPhaseIndex)) return;
+    if (!validPhases.includes(S.currentPhaseIndex)) return;
     const p = getCurrentPlayer();
     const opp = getOpponent();
     if (isMirageActive()) {
@@ -3453,15 +3302,15 @@ function useSoulSnatch(areaIdx) {
     if (card && getEffectiveEffectId(p, areaIdx) === 'soul_snatch') {
         if (p.magic >= 3) {
             p.magic -= 3;
-            if (currentPhaseIndex === 2) p.magicSpentInJudging += 3;
+            if (S.currentPhaseIndex === 2) p.magicSpentInJudging += 3;
             opp.hp -= 1;
             p.hp += 1;
             addLog(`${p.name} 使用了「奪魂」，消耗 3 點魔力吸收對手 1 點生命值`);
             
             if (opp.hp <= 0) {
-                winner = p.name;
+                S.winner = p.name;
                 winModalDismissed = false;
-                addLog(`遊戲結束！${winner} 獲得勝利！`);
+                addLog(`遊戲結束！${S.winner} 獲得勝利！`);
             }
             render();
         } else {
@@ -3476,7 +3325,7 @@ function useSoulSnatch(areaIdx) {
 function renderComputerTurnGuard() {
     if (appScreen !== 'game') return null;
     if (!isComputerTurnNow()) return null;
-    if (winner) return null;
+    if (S.winner) return null;
 
     const guard = document.createElement('div');
     guard.className = 'fixed inset-0 z-[2000] cursor-not-allowed';
@@ -3504,7 +3353,7 @@ function renderComputerTurnGuard() {
 }
 
 function renderWinModalOverlay() {
-    if (!winner || winModalDismissed) return null;
+    if (!S.winner || winModalDismissed) return null;
 
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 z-[3000] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm';
@@ -3517,7 +3366,7 @@ function renderWinModalOverlay() {
         <div class="px-5 py-4 bg-slate-950/40 border-b border-slate-800 text-center">
             <div class="text-[10px] font-black text-slate-300 uppercase tracking-[0.35em]">對局結束</div>
             <div class="mt-1 text-[20px] sm:text-3xl font-black text-white tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">
-                ${winner} 獲勝
+                ${S.winner} 獲勝
             </div>
         </div>
         <div class="px-5 py-4 text-center">
@@ -3542,13 +3391,13 @@ function renderWinModalOverlay() {
 }
 
 function targetReproduction(targetAreaIdx, atkIdx) {
-    if (!reproductionSelectionMode) return;
+    if (!S.reproductionSelectionMode) return;
     const p = getCurrentPlayer();
     
     if (p.magic < 2) {
         showToast('魔力不足 (需要 2 點)');
-        reproductionSelectionMode = false;
-        reproductionSourceAreaIdx = -1;
+        S.reproductionSelectionMode = false;
+        S.reproductionSourceAreaIdx = -1;
         render();
         return;
     }
@@ -3557,21 +3406,21 @@ function targetReproduction(targetAreaIdx, atkIdx) {
     if (atkVal > 0) {
         p.currentAttacks[targetAreaIdx].push(atkVal);
         p.magic -= 2;
-        if (reproductionSourceAreaIdx !== -1) {
-            p.reproductionUsedIndices.push(reproductionSourceAreaIdx);
+        if (S.reproductionSourceAreaIdx !== -1) {
+            p.reproductionUsedIndices.push(S.reproductionSourceAreaIdx);
         }
         
         addLog(`${p.name} 使用了「再現」，使強度為 ${atkVal} 的攻擊變為兩次`);
-        reproductionSelectionMode = false;
-        reproductionSourceAreaIdx = -1;
+        S.reproductionSelectionMode = false;
+        S.reproductionSourceAreaIdx = -1;
         render();
     }
 }
 
 function useFate(areaIdx) {
     // Fate can now be used in Phase 1 (after roll) or Phase 2 (Judging)
-    if (currentPhaseIndex !== 1 && currentPhaseIndex !== 2) return;
-    if (currentPhaseIndex === 1 && diceResults.length === 0) return; // Must roll first
+    if (S.currentPhaseIndex !== 1 && S.currentPhaseIndex !== 2) return;
+    if (S.currentPhaseIndex === 1 && S.diceResults.length === 0) return; // Must roll first
 
     const p = getCurrentPlayer();
     const card = p.activeAreaEffects[areaIdx];
@@ -3581,47 +3430,47 @@ function useFate(areaIdx) {
             showToast('這張命運卡本回合已使用過');
             return;
         }
-        fateSelectionMode = !fateSelectionMode;
-        fateSourceAreaIdx = areaIdx;
-        fateSelectedDiceIndices = [];
+        S.fateSelectionMode = !S.fateSelectionMode;
+        S.fateSourceAreaIdx = areaIdx;
+        S.fateSelectedDiceIndices = [];
         render();
     }
 }
 
 function toggleDiceIndexSelection(idx) {
-    if (!fateSelectionMode) return;
+    if (!S.fateSelectionMode) return;
     
-    if (fateSelectedDiceIndices.includes(idx)) {
+    if (S.fateSelectedDiceIndices.includes(idx)) {
         // Deselect
-        fateSelectedDiceIndices = fateSelectedDiceIndices.filter(i => i !== idx);
+        S.fateSelectedDiceIndices = S.fateSelectedDiceIndices.filter(i => i !== idx);
     } else {
         // No limit per user request
-        fateSelectedDiceIndices.push(idx);
+        S.fateSelectedDiceIndices.push(idx);
     }
     render();
 }
 
 function confirmFate() {
-    if (!fateSelectionMode) return;
+    if (!S.fateSelectionMode) return;
     const p = getCurrentPlayer();
     
-    if (fateSelectedDiceIndices.length === 0) {
+    if (S.fateSelectedDiceIndices.length === 0) {
         // Just cancel selection mode if nothing selected
-        fateSelectionMode = false;
-        fateSourceAreaIdx = -1;
+        S.fateSelectionMode = false;
+        S.fateSourceAreaIdx = -1;
         render();
         return;
     }
 
-    fateSelectedDiceIndices.forEach(idx => {
-        diceResults[idx] = Math.floor(Math.random() * 6) + 1;
+    S.fateSelectedDiceIndices.forEach(idx => {
+        S.diceResults[idx] = Math.floor(Math.random() * 6) + 1;
     });
-    if (fateSourceAreaIdx !== -1) {
-        p.fateUsedIndices.push(fateSourceAreaIdx);
+    if (S.fateSourceAreaIdx !== -1) {
+        p.fateUsedIndices.push(S.fateSourceAreaIdx);
     }
-    fateSelectionMode = false;
-    fateSourceAreaIdx = -1;
-    fateSelectedDiceIndices = [];
+    S.fateSelectionMode = false;
+    S.fateSourceAreaIdx = -1;
+    S.fateSelectedDiceIndices = [];
     addLog('命運扭轉！骰子已重擲');
     handleJudging();
     render();
@@ -3630,11 +3479,11 @@ function confirmFate() {
 function handleBuyPhase() {
     const p = getCurrentPlayer();
     addLog('--- 購買階段 ---');
-    buyDeckDrawCount = 0;
+    S.buyDeckDrawCount = 0;
     // Mobile UX：購買階段預設顯示市場（在底部 dock）
     mobileDockTab = 'market';
     handDrawerOpen = true;
-    phaseHint = deck.length === 0
+    S.phaseHint = S.deck.length === 0
         ? '牌庫空：可結束/買市'
         : '先抽免費牌，再買';
     render();
@@ -3674,10 +3523,10 @@ function renderMarketPanel(typeColors) {
     const deckWrap = document.createElement('div');
     deckWrap.className = 'w-full flex flex-col items-center gap-2';
 
-    const nextDrawIndex = buyDeckDrawCount + 1;
+    const nextDrawIndex = S.buyDeckDrawCount + 1;
     const nextDrawCost = getDeckDrawCost(nextDrawIndex);
-    const canDraw = currentPhaseIndex === 6 && deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost;
-    const mustDraw = currentPhaseIndex === 6 && buyDeckDrawCount < 1;
+    const canDraw = S.currentPhaseIndex === 6 && S.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost;
+    const mustDraw = S.currentPhaseIndex === 6 && S.buyDeckDrawCount < 1;
 
     const deckCard = document.createElement('div');
     deckCard.className = `card-frame shadow-sm relative flex items-center justify-center ${canDraw ? 'cursor-pointer' : 'opacity-60'}`;
@@ -3685,7 +3534,7 @@ function renderMarketPanel(typeColors) {
     deckCard.innerHTML = `
         <div class="flex flex-col items-center justify-center text-white">
             <div class="text-[10px] font-black tracking-[0.25em]">DECK</div>
-            <div class="text-[10px] font-bold opacity-80 mt-1">剩餘 ${deck.length}</div>
+            <div class="text-[10px] font-bold opacity-80 mt-1">剩餘 ${S.deck.length}</div>
         </div>
     `;
 
@@ -3718,9 +3567,9 @@ function renderMarketPanel(typeColors) {
         const wrap = document.createElement('div');
         wrap.className = 'w-full flex flex-col items-center gap-2';
 
-        const c = market[idx];
+        const c = S.market[idx];
         const cardEl = document.createElement('div');
-        const canBuy = currentPhaseIndex === 6 && !!c && p.gold >= price;
+        const canBuy = S.currentPhaseIndex === 6 && !!c && p.gold >= price;
         cardEl.className = `card-frame shadow-sm group relative ${canBuy ? 'cursor-pointer' : (c ? 'opacity-60' : 'opacity-30')}`;
         cardEl.setAttribute('style', getCardFrameStyleVars('market'));
 
@@ -3755,8 +3604,8 @@ function renderMarketPanel(typeColors) {
 // --- Interaction Handlers ---
 
 function rollDice(count) {
-    if (currentPhaseIndex !== 1) return;
-    if (diceResults.length > 0) return;
+    if (S.currentPhaseIndex !== 1) return;
+    if (S.diceResults.length > 0) return;
 
     const p = getCurrentPlayer();
     const luckyIdx = p.activeAreaEffects.findIndex(c => c && c.effectId === 'lucky');
@@ -3764,32 +3613,32 @@ function rollDice(count) {
     
     if (luckyIdx !== -1) {
         finalCount = count + 1;
-        luckySelectionMode = true;
-        luckySourceAreaIdx = luckyIdx;
+        S.luckySelectionMode = true;
+        S.luckySourceAreaIdx = luckyIdx;
         addLog(`[幸運] 啟動！額外投擲一顆骰子 (總計 ${finalCount} 顆)`);
     }
 
-    diceResults = [];
+    S.diceResults = [];
     for (let i = 0; i < finalCount; i++) {
-        diceResults.push(Math.floor(Math.random() * 6) + 1);
+        S.diceResults.push(Math.floor(Math.random() * 6) + 1);
     }
     render();
 }
 
 function removeLuckyDie(idx) {
-    if (!luckySelectionMode) return;
+    if (!S.luckySelectionMode) return;
     
-    const removedVal = diceResults[idx];
-    diceResults.splice(idx, 1);
-    luckySelectionMode = false;
-    luckySourceAreaIdx = -1;
+    const removedVal = S.diceResults[idx];
+    S.diceResults.splice(idx, 1);
+    S.luckySelectionMode = false;
+    S.luckySourceAreaIdx = -1;
     
     addLog(`[幸運] 移除了骰子 ${removedVal}`);
     render();
 }
 
 function selectHandCard(idx) {
-    if (currentPhaseIndex !== 0) return;
+    if (S.currentPhaseIndex !== 0) return;
     // Preserve hand scroll positions before rerender
     const mobile = document.getElementById('mobile-hand-list');
     if (mobile) mobileHandScrollLeft = (mobile as HTMLDivElement).scrollLeft;
@@ -3797,7 +3646,7 @@ function selectHandCard(idx) {
     if (d0) desktopHandScrollLeft[0] = (d0 as HTMLDivElement).scrollLeft;
     const d1 = document.getElementById('desktop-hand-wrap-1');
     if (d1) desktopHandScrollLeft[1] = (d1 as HTMLDivElement).scrollLeft;
-    selectedHandCardIndex = idx;
+    S.selectedHandCardIndex = idx;
     render();
 }
 
@@ -3805,24 +3654,24 @@ function selectHandCard(idx) {
 // （視覺上比照「非購買階段的市場」：淡化 + 不給游標 + 不綁事件）。
 // 準備階段：只有後手能出，且只能出 1 張；出牌階段：上限 3 張。
 function canPlayMoreCardsThisTurn() {
-    if (currentPhaseIndex !== 0) return false;
+    if (S.currentPhaseIndex !== 0) return false;
     const p = getCurrentPlayer();
-    if (inPreparationPhase) return currentPlayerIndex === 1 && p.cardsPlayedThisTurn < 1;
+    if (S.inPreparationPhase) return S.currentPlayerIndex === 1 && p.cardsPlayedThisTurn < 1;
     return p.cardsPlayedThisTurn < 3;
 }
 
 function playToBoard(areaIdx) {
-    if (currentPhaseIndex !== 0) return;
-    if (selectedHandCardIndex === -1) return;
+    if (S.currentPhaseIndex !== 0) return;
+    if (S.selectedHandCardIndex === -1) return;
 
     const p = getCurrentPlayer();
 
     // One-time Preparation Phase rule: 後手只能打出 1 張，且必須先打完才可開始遊戲
-    if (inPreparationPhase) {
-        if (currentPlayerIndex !== 1) return;
+    if (S.inPreparationPhase) {
+        if (S.currentPlayerIndex !== 1) return;
         if (p.cardsPlayedThisTurn >= 1) {
             // Don't use modal/alert; show it in the top hint area instead.
-            phaseHint = '準備階段只能打出 1 張牌';
+            S.phaseHint = '準備階段只能打出 1 張牌';
             render();
             return;
         }
@@ -3833,21 +3682,21 @@ function playToBoard(areaIdx) {
         return;
     }
 
-    const card = p.hand.splice(selectedHandCardIndex, 1)[0];
+    const card = p.hand.splice(S.selectedHandCardIndex, 1)[0];
     p.board[areaIdx].push(card);
     
     // Update active effect for the area
     p.activeAreaEffects[areaIdx] = card;
 
     p.cardsPlayedThisTurn += 1;
-    selectedHandCardIndex = -1;
+    S.selectedHandCardIndex = -1;
     
-    if (inPreparationPhase) {
-        phaseHint = '準備完成：按開始';
+    if (S.inPreparationPhase) {
+        S.phaseHint = '準備完成：按開始';
     } else {
         // 出滿 3 張、或手牌剛好打完時，就不要再說「繼續出牌」。
         const canPlayMore = p.cardsPlayedThisTurn < 3 && p.hand.length > 0;
-        phaseHint = canPlayMore
+        S.phaseHint = canPlayMore
             ? `已出${p.cardsPlayedThisTurn}張，繼續出牌或擲骰`
             : `已出${p.cardsPlayedThisTurn}張，進行擲骰`;
     }
@@ -3856,7 +3705,7 @@ function playToBoard(areaIdx) {
 }
 
 function useBarrier(areaIdx) {
-    if (currentPhaseIndex !== 3) return; // Defense Phase
+    if (S.currentPhaseIndex !== 3) return; // Defense Phase
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -3882,29 +3731,29 @@ function useBarrier(areaIdx) {
 }
 
 function useCharge(areaIdx, hitIdx = -1) {
-    if (currentPhaseIndex !== 5) return; 
+    if (S.currentPhaseIndex !== 5) return; 
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
         return;
     }
     
-    if (chargeSelectionMode) {
+    if (S.chargeSelectionMode) {
         // Step 2: Selecting specific target hit
         if (hitIdx !== -1 && p.currentAttacks[areaIdx][hitIdx] > 0) {
             if (p.magic >= 2) {
                 p.magic -= 2;
                 p.currentAttacks[areaIdx][hitIdx] += 3;
-                if (chargeSourceAreaIdx !== -1) {
-                    p.chargeUsedIndices.push(chargeSourceAreaIdx);
+                if (S.chargeSourceAreaIdx !== -1) {
+                    p.chargeUsedIndices.push(S.chargeSourceAreaIdx);
                 }
-                chargeSelectionMode = false;
-                chargeSourceAreaIdx = -1;
+                S.chargeSelectionMode = false;
+                S.chargeSourceAreaIdx = -1;
                 render();
             } else {
                 showToast('魔力不足 (需要 2 點)');
-                chargeSelectionMode = false;
-                chargeSourceAreaIdx = -1;
+                S.chargeSelectionMode = false;
+                S.chargeSourceAreaIdx = -1;
                 render();
             }
         } else if (hitIdx === -1) {
@@ -3922,8 +3771,8 @@ function useCharge(areaIdx, hitIdx = -1) {
                 return;
             }
             if (p.magic >= 2) {
-                chargeSelectionMode = true;
-                chargeSourceAreaIdx = areaIdx;
+                S.chargeSelectionMode = true;
+                S.chargeSourceAreaIdx = areaIdx;
                 render();
             } else {
                 showToast('魔力不足 (需要 2 點)');
@@ -3933,7 +3782,7 @@ function useCharge(areaIdx, hitIdx = -1) {
 }
 
 function useMagicBullet(areaIdx) {
-    if (currentPhaseIndex !== 5) return;
+    if (S.currentPhaseIndex !== 5) return;
     const p = getCurrentPlayer();
     if (isMirageActive()) {
         showToast('「幻境」生效中，無法消耗魔力發動效果');
@@ -4028,13 +3877,13 @@ function renderMobileActionBar() {
     const bar = document.createElement('div');
     bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-[#eceae5] border-t-[3px] border-[#603b2d]';
 
-    let displayPhaseHint = getActionBlockReason() || phaseHint;
-    if (luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
-    if (illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
+    let displayPhaseHint = getActionBlockReason() || S.phaseHint;
+    if (S.luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
+    if (S.illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
 
     const step = document.createElement('div');
     step.className = 'shrink-0 px-2 py-1 rounded-none bg-[#dcdad3] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420] tracking-wider whitespace-nowrap';
-    step.innerText = inPreparationPhase ? '準備階段' : PHASE_NAMES[currentPhaseIndex];
+    step.innerText = S.inPreparationPhase ? '準備階段' : PHASE_NAMES[S.currentPhaseIndex];
     bar.appendChild(step);
 
     const hint = document.createElement('div');
@@ -4054,7 +3903,7 @@ function buildMobileActionControls() {
 
         // 對局結束且關掉勝利視窗後：要能直接重開，
         // 否則只剩「回首頁再重選一次模式」這條路。
-        if (winner && winModalDismissed) {
+        if (S.winner && winModalDismissed) {
             const again = document.createElement('button');
             again.className = 'bg-[#c48e36] text-[#2a2420] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#603b2d] active:translate-x-[2px] active:translate-y-[2px]';
             again.innerText = '再來一場';
@@ -4066,35 +3915,35 @@ function buildMobileActionControls() {
             btn.innerText = '回到首頁';
             btn.onclick = () => goHome();
             right.appendChild(btn);
-        } else if (winner) {
+        } else if (S.winner) {
             // Winner modal 未關閉時：右上不顯示任何操作（避免跟 modal 按鈕重複）
         } else
 
-        if (inPreparationPhase) {
+        if (S.inPreparationPhase) {
             const btn = document.createElement('button');
-            const prepDone = players[1].cardsPlayedThisTurn >= 1;
+            const prepDone = S.players[1].cardsPlayedThisTurn >= 1;
             btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${prepDone ? 'bg-[#c48e36] text-[#2a2420] border-[#603b2d] shadow-[2px_2px_0_0_rgba(42,36,32,0.45)]' : 'bg-[#dcdad3] text-[#2a2420]/35 border-[#603b2d]/35'}`;
             btn.innerText = '開始';
             if (prepDone) {
                 btn.onclick = () => {
-                    inPreparationPhase = false;
-                    currentPlayerIndex = 0;
-                    currentPhaseIndex = 0;
-                    selectedHandCardIndex = -1;
-                    diceResults = [];
-                    skippedPlayBecauseNoHand = false;
+                    S.inPreparationPhase = false;
+                    S.currentPlayerIndex = 0;
+                    S.currentPhaseIndex = 0;
+                    S.selectedHandCardIndex = -1;
+                    S.diceResults = [];
+                    S.skippedPlayBecauseNoHand = false;
                     // Mobile：出牌階段時手牌抽屜自動彈出
                     // 並切到手牌 tab
                     mobileDockTab = 'hand';
                     handDrawerOpen = isMobileLayout();
-                    players[0].cardsPlayedThisTurn = 0;
-                    players[1].cardsPlayedThisTurn = 0;
-                    phaseHint = '選牌出牌';
+                    S.players[0].cardsPlayedThisTurn = 0;
+                    S.players[1].cardsPlayedThisTurn = 0;
+                    S.phaseHint = '選牌出牌';
                     render();
                 };
             }
             right.appendChild(btn);
-        } else if (currentPhaseIndex === 1 && diceResults.length === 0) {
+        } else if (S.currentPhaseIndex === 1 && S.diceResults.length === 0) {
             const p = getCurrentPlayer();
             const shouldRollFiveBecauseNoHand = p.hand.length === 0 && p.cardsPlayedThisTurn === 0;
             const rollOptions = shouldRollFiveBecauseNoHand
@@ -4107,16 +3956,16 @@ function buildMobileActionControls() {
                 btn.onclick = () => rollDice(count);
                 right.appendChild(btn);
             });
-        } else if (fateSelectionMode) {
+        } else if (S.fateSelectionMode) {
             const btn = document.createElement('button');
             btn.className = 'bg-[#d0c954] text-[#2a2420] px-3 py-2 rounded-none font-black text-[10px] uppercase tracking-wider border-2 border-[#603b2d] active:translate-x-[2px] active:translate-y-[2px]';
-            btn.innerText = `重擲(${fateSelectedDiceIndices.length})`;
+            btn.innerText = `重擲(${S.fateSelectedDiceIndices.length})`;
             btn.onclick = confirmFate;
             right.appendChild(btn);
         } else {
             const btn = document.createElement('button');
             const isActionBlocked = getActionBlockReason() !== null;
-            const label = currentPhaseIndex === 6 ? '結束' : currentPhaseIndex === 4 ? '結算' : '繼續';
+            const label = S.currentPhaseIndex === 6 ? '結束' : S.currentPhaseIndex === 4 ? '結算' : '繼續';
             btn.className = `px-3 py-2 rounded-none font-black text-[11px] tracking-widest border-2 ${isActionBlocked ? 'bg-[#dcdad3] text-[#2a2420]/35 border-[#603b2d]/35' : 'bg-[#c48e36] text-[#2a2420] border-[#603b2d] shadow-[2px_2px_0_0_rgba(42,36,32,0.45)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none'}`;
             btn.innerText = label;
             if (!isActionBlocked) btn.onclick = nextPhase;
@@ -4144,15 +3993,15 @@ function renderMobileMarketRow(typeColors) {
     list.addEventListener('scroll', hideGlobalTooltip);
 
     // Deck buy card (left)
-    const nextDrawIndex = buyDeckDrawCount + 1;
+    const nextDrawIndex = S.buyDeckDrawCount + 1;
     const nextDrawCost = getDeckDrawCost(nextDrawIndex);
-    const canDraw = currentPhaseIndex === 6 && deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost;
-    const mustDraw = currentPhaseIndex === 6 && buyDeckDrawCount < 1;
+    const canDraw = S.currentPhaseIndex === 6 && S.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost;
+    const mustDraw = S.currentPhaseIndex === 6 && S.buyDeckDrawCount < 1;
 
     const deckCard = document.createElement('div');
     deckCard.className = `card-frame shadow-sm relative flex items-center justify-center ${canDraw ? 'cursor-pointer' : 'opacity-60'}`;
     deckCard.setAttribute('style', `${getMobileCardFrameStyleVars('market')} background: linear-gradient(135deg, #0f172a, #1e293b); border-color: #334155;`);
-    deckCard.innerHTML = `<div class="flex flex-col items-center justify-center text-white"><div class="text-[10px] font-black tracking-[0.25em]">DECK</div><div class="text-[10px] font-bold opacity-80 mt-1">${deck.length}</div></div>`;
+    deckCard.innerHTML = `<div class="flex flex-col items-center justify-center text-white"><div class="text-[10px] font-black tracking-[0.25em]">DECK</div><div class="text-[10px] font-bold opacity-80 mt-1">${S.deck.length}</div></div>`;
     if (canDraw) {
         // ring 稍微細一點，避免佔用太多空間
         // mustDraw = 第 1 張免費抽牌：用綠色提示
@@ -4164,7 +4013,7 @@ function renderMobileMarketRow(typeColors) {
     // 顯示「抽牌成本」在牌庫卡下方（動態）
     const deckCostTag = document.createElement('div');
     deckCostTag.className = 'mt-1 text-[10px] font-black text-slate-500 text-center';
-    deckCostTag.innerText = (deck.length === 0 || !Number.isFinite(nextDrawCost))
+    deckCostTag.innerText = (S.deck.length === 0 || !Number.isFinite(nextDrawCost))
         ? '—'
         : `-${nextDrawCost}金幣`;
 
@@ -4182,9 +4031,9 @@ function renderMobileMarketRow(typeColors) {
         {idx: 2, price: 1},
     ];
     slots.forEach(({idx, price}) => {
-        const c = market[idx];
+        const c = S.market[idx];
         const cardEl = document.createElement('div');
-        const canBuy = currentPhaseIndex === 6 && !!c && p.gold >= price;
+        const canBuy = S.currentPhaseIndex === 6 && !!c && p.gold >= price;
         cardEl.className = `card-frame shadow-sm group relative ${canBuy ? 'cursor-pointer' : (c ? 'opacity-60' : 'opacity-30')}`;
         cardEl.setAttribute('style', getMobileCardFrameStyleVars('market'));
         if (c) {
@@ -4268,8 +4117,8 @@ function renderMobilePlayerBlock(
     typeColors,
     {position, showBoard, bothBoards}: {position: 'top' | 'bottom'; showBoard: boolean; bothBoards: boolean}
 ) {
-    const p = players[idx];
-    const isCurrent = currentPlayerIndex === idx;
+    const p = S.players[idx];
+    const isCurrent = S.currentPlayerIndex === idx;
 
     const wrap = document.createElement('div');
     // Player background: 先手(玩家0)=淡紅、後手(玩家1)=淡藍
@@ -4347,17 +4196,17 @@ function renderMobilePlayerBlock(
                 if (atkVal === 0) return;
                 let displayVal = atkVal;
                 let isFullyBlocked = false;
-                if (currentPhaseIndex === 3 || currentPhaseIndex === 4) {
+                if (S.currentPhaseIndex === 3 || S.currentPhaseIndex === 4) {
                     displayVal = Math.max(0, atkVal - cur.defense);
                     if (displayVal <= 0) isFullyBlocked = true;
                 }
 
                 const b = document.createElement('div');
                 const bgColor = isFullyBlocked ? 'bg-slate-400' : 'bg-red-500';
-                const activeColor = evasionSelectionMode ? 'bg-amber-500 scale-110 ring-2 ring-amber-200 cursor-pointer animate-pulse' : bgColor;
+                const activeColor = S.evasionSelectionMode ? 'bg-amber-500 scale-110 ring-2 ring-amber-200 cursor-pointer animate-pulse' : bgColor;
                 b.className = `text-white text-[11px] font-black px-2 py-0.5 rounded-md shadow border border-white transition-all ${activeColor}`;
                 b.innerText = displayVal.toString();
-                if (evasionSelectionMode) {
+                if (S.evasionSelectionMode) {
                     b.onclick = (e) => {
                         e.stopPropagation();
                         targetEvasion(aIdx, hitIdx);
@@ -4410,7 +4259,7 @@ function renderMobilePlayerBlock(
             const zone = document.createElement('div');
             // No `h-full`: an explicit height would make the cross size non-auto
             // and switch OFF the parent's `items-stretch`.
-            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-none transition-all border-2 border-transparent min-h-0 ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
+            zone.className = `relative flex flex-col items-center gap-1 p-1 rounded-none transition-all border-2 border-transparent min-h-0 ${S.currentPhaseIndex === 2 && S.diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
 
             zone.innerHTML = `
                 <div class="w-full flex items-center justify-center pt-2 pb-0">
@@ -4428,7 +4277,7 @@ function renderMobilePlayerBlock(
             // 想要的高度是 200px；空間不足時可收縮，但不得低於這疊卡實際需要的高度。
             // 張數多時這個下限會超過 200px，區域就跟著變高。
             const slotSize = 'h-[200px]';
-            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
+            slot.className = `minimal-slot -mt-2 w-[150px] ${slotSize} border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && S.currentPhaseIndex === 0 && S.selectedHandCardIndex !== -1 ? 'hover:border-indigo-400 cursor-pointer hover:bg-white' : ''}`;
             // 拖曳出牌的放置目標（不需要先選牌，所以條件比點擊版寬鬆）
             // 高度設成「下限」而不是「想要的值」，再用 flex-grow 往上長到上限。
             // 這點很關鍵：祖先在算最小內容高度時看的是 height，若直接寫 200px，
@@ -4436,7 +4285,7 @@ function renderMobilePlayerBlock(
             // 卡疊變高時下限跟著變高，區域就自然變長。
             applySlotHeight(slot, getSlotMinHeightPx(p.board[aIdx].length, 135, 110), 200);
             if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
-            if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
+            if (isCurrent && S.currentPhaseIndex === 0 && S.selectedHandCardIndex !== -1) slot.onclick = () => playToBoard(aIdx);
 
             const {wrap: atkWrap, grid: atkContainer} = createAttackBadgeRow('-bottom-4');
             const effects = isCurrent ? p.currentAttacks[aIdx] : p.attackQueue[aIdx];
@@ -4445,15 +4294,15 @@ function renderMobilePlayerBlock(
                 const atkBadge = document.createElement('div');
                 let displayVal = atkVal;
                 let isFullyBlocked = false;
-                if (!isCurrent && (currentPhaseIndex === 3 || currentPhaseIndex === 4)) {
+                if (!isCurrent && (S.currentPhaseIndex === 3 || S.currentPhaseIndex === 4)) {
                     const currentPlayer = getCurrentPlayer();
                     displayVal = Math.max(0, atkVal - currentPlayer.defense);
                     if (displayVal <= 0) isFullyBlocked = true;
                 }
-                const canBeDodged = !isCurrent && evasionSelectionMode;
-                const isChargeTarget = isCurrent && chargeSelectionMode;
-                const isReproductionTarget = isCurrent && reproductionSelectionMode;
-                const isFlareTarget = isCurrent && flareSelectionMode;
+                const canBeDodged = !isCurrent && S.evasionSelectionMode;
+                const isChargeTarget = isCurrent && S.chargeSelectionMode;
+                const isReproductionTarget = isCurrent && S.reproductionSelectionMode;
+                const isFlareTarget = isCurrent && S.flareSelectionMode;
                 const bgColor = isFullyBlocked ? 'bg-slate-400' : 'bg-red-500';
                 const activeColor = (isChargeTarget || canBeDodged || isReproductionTarget || isFlareTarget) ? 'bg-amber-500 scale-110 ring-2 ring-amber-200 cursor-pointer animate-pulse' : bgColor;
                 atkBadge.className = `text-white text-[11px] font-black px-2 py-0.5 rounded-md shadow-lg border-2 border-white transition-all ${activeColor}`;
@@ -4486,8 +4335,8 @@ function renderMobilePlayerBlock(
                 if (p.contractTriggeredAreaIdx === aIdx && isActiveEffect) cardEl.classList.add('ring-2', 'ring-red-500', 'z-50');
                 if (effId === 'breakthrough' && isActiveEffect && p.hp <= 3) cardEl.classList.add('ring-2', 'ring-cyan-400', 'z-40');
                 if (effId === 'mirage' && isActiveEffect) cardEl.classList.add('ring-2', 'ring-violet-500', 'z-40');
-                if (card.effectId === 'illusion' && isActiveEffect && illusionSelectionMode && illusionSourceAreaIdx === aIdx) cardEl.classList.add('ring-2', 'ring-teal-400', 'z-40');
-                if (effId === 'lucky' && isActiveEffect && isCurrent && currentPhaseIndex === 1 && (diceResults.length === 0 || luckySelectionMode)) cardEl.classList.add('ring-2', 'ring-lime-400', 'z-40');
+                if (card.effectId === 'illusion' && isActiveEffect && S.illusionSelectionMode && S.illusionSourceAreaIdx === aIdx) cardEl.classList.add('ring-2', 'ring-teal-400', 'z-40');
+                if (effId === 'lucky' && isActiveEffect && isCurrent && S.currentPhaseIndex === 1 && (S.diceResults.length === 0 || S.luckySelectionMode)) cardEl.classList.add('ring-2', 'ring-lime-400', 'z-40');
 
                 const displayEffectName = (() => {
                     if (card.effectId !== 'illusion') return card.effectName;
@@ -4513,105 +4362,105 @@ function renderMobilePlayerBlock(
                 // 先前只在桌機 renderPlayerArea() 綁定，導致手機版無法觸發。
                 if (isCurrent && isTop && isActiveEffect) {
                     const isMirageBlocked = isMirageActive();
-                    if (currentPhaseIndex === 5 && effId === 'charge') {
+                    if (S.currentPhaseIndex === 5 && effId === 'charge') {
                         if (p.magic >= 2 && !p.chargeUsedIndices.includes(aIdx) && !isMirageBlocked) {
-                            const isSource = chargeSelectionMode && chargeSourceAreaIdx === aIdx;
+                            const isSource = S.chargeSelectionMode && S.chargeSourceAreaIdx === aIdx;
                             cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useCharge(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 5 && effId === 'magic_bullet') {
+                    } else if (S.currentPhaseIndex === 5 && effId === 'magic_bullet') {
                         if (p.magic >= 1 && !isMirageBlocked) {
                             cardEl.classList.add('ring-2', 'ring-emerald-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useMagicBullet(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 5 && effId === 'amplify') {
+                    } else if (S.currentPhaseIndex === 5 && effId === 'amplify') {
                         // Amplify is free: Only pulse if THIS specific area's amplify not used
                         if (!p.amplifyUsedIndices.includes(aIdx) && hasAnyAttackTarget(p)) {
                             cardEl.classList.add('ring-2', 'ring-blue-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useAmplify(aIdx); };
                         }
-                    } else if ((currentPhaseIndex === 1 || currentPhaseIndex === 2) && effId === 'fate') {
+                    } else if ((S.currentPhaseIndex === 1 || S.currentPhaseIndex === 2) && effId === 'fate') {
                         // Fate: Re-roll dice (usable in Roll phase after roll, or Judging phase)
-                        const diceRolled = diceResults.length > 0;
-                        if (!p.fateUsedIndices.includes(aIdx) && diceRolled && !luckySelectionMode) {
-                            cardEl.classList.add('ring-2', fateSelectionMode ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
+                        const diceRolled = S.diceResults.length > 0;
+                        if (!p.fateUsedIndices.includes(aIdx) && diceRolled && !S.luckySelectionMode) {
+                            cardEl.classList.add('ring-2', S.fateSelectionMode ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useFate(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 3 && effId === 'dodge') {
+                    } else if (S.currentPhaseIndex === 3 && effId === 'dodge') {
                         // Dodge: Ignore incoming attack in Defense Phase
                         const opp = getOpponent();
                         const hasDodgeableAttacks = opp.attackQueue.flat().length > 0;
                         if (!p.evasionUsedIndices.includes(aIdx) && p.magic >= 3 && hasDodgeableAttacks && !isMirageBlocked) {
-                            const isSource = evasionSelectionMode && evasionSourceAreaIdx === aIdx;
+                            const isSource = S.evasionSelectionMode && S.evasionSourceAreaIdx === aIdx;
                             cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useEvasion(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 3 && effId === 'barrier') {
+                    } else if (S.currentPhaseIndex === 3 && effId === 'barrier') {
                         // Modified Barrier: Consume 3 magic for 3 defense in Defense Phase
                         if (p.magic >= 3 && !p.barrierUsedIndices.includes(aIdx) && !isMirageBlocked) {
                             cardEl.classList.add('ring-2', 'ring-indigo-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useBarrier(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 3 && effId === 'shield') {
+                    } else if (S.currentPhaseIndex === 3 && effId === 'shield') {
                         // Shield: Consume 2 magic for 1 defense in Defense Phase
                         if (p.magic >= 2 && !isMirageBlocked) {
                             cardEl.classList.add('ring-2', 'ring-blue-300', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useShield(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 5 && effId === 'reproduction') {
+                    } else if (S.currentPhaseIndex === 5 && effId === 'reproduction') {
                         // Reproduction: Consume 2 magic, make one attack twice
                         if (!p.reproductionUsedIndices.includes(aIdx) && p.magic >= 2 && !isMirageBlocked) {
-                            const isSource = reproductionSelectionMode && reproductionSourceAreaIdx === aIdx;
+                            const isSource = S.reproductionSelectionMode && S.reproductionSourceAreaIdx === aIdx;
                             cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useReproduction(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 5 && effId === 'flare') {
+                    } else if (S.currentPhaseIndex === 5 && effId === 'flare') {
                         // Flare: Consume 3 magic, double one attack
                         if (!p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && hasAnyAttackTarget(p) && !isMirageBlocked) {
-                            const isSource = flareSelectionMode && flareSourceAreaIdx === aIdx;
+                            const isSource = S.flareSelectionMode && S.flareSourceAreaIdx === aIdx;
                             cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useFlare(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 5 && effId === 'thrust') {
+                    } else if (S.currentPhaseIndex === 5 && effId === 'thrust') {
                         // Thrust: Double all 1s and 2s
                         const canThrust = hasAnyThrustTarget(p);
                         if (!p.thrustUsedIndices.includes(aIdx) && canThrust) {
                             cardEl.classList.add('ring-2', 'ring-rose-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useThrust(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 5 && effId === 'forest') {
+                    } else if (S.currentPhaseIndex === 5 && effId === 'forest') {
                         // Forest: Merge all attacks
                         if (!p.forestUsedIndices.includes(aIdx) && p.magic >= 3 && !isMirageBlocked) {
                             cardEl.classList.add('ring-2', 'ring-emerald-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useForest(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 1 && effId === 'frost') {
+                    } else if (S.currentPhaseIndex === 1 && effId === 'frost') {
                         // Frost: Discard a die for 1-3 extra attack
-                        const diceRolled = diceResults.length > 0;
-                        if (!p.frostUsedIndices.includes(aIdx) && diceRolled && !luckySelectionMode) {
-                            const isSource = frostSelectionMode && frostSourceAreaIdx === aIdx;
+                        const diceRolled = S.diceResults.length > 0;
+                        if (!p.frostUsedIndices.includes(aIdx) && diceRolled && !S.luckySelectionMode) {
+                            const isSource = S.frostSelectionMode && S.frostSourceAreaIdx === aIdx;
                             cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-blue-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useFrost(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 2 && effId === 'magic_luck') {
+                    } else if (S.currentPhaseIndex === 2 && effId === 'magic_luck') {
                         if (p.magic >= 2 && !p.magicLuckUsedIndices.includes(aIdx) && !isMirageBlocked) {
                             cardEl.classList.add('ring-2', 'ring-purple-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useMagicLuck(aIdx); };
                         }
-                    } else if (currentPhaseIndex === 2 && card.effectId === 'illusion') {
+                    } else if (S.currentPhaseIndex === 2 && card.effectId === 'illusion') {
                         const opp = getOpponent();
                         const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
                         if (p.magic >= 1 && !p.illusionUsedIndices.includes(aIdx) && !isMirageBlocked && hasCopyableCard) {
                             cardEl.classList.add('ring-2', 'ring-teal-400', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useIllusion(aIdx); };
                         }
-                    } else if ([2, 3, 4, 5].includes(currentPhaseIndex) && effId === 'holy_light') {
+                    } else if ([2, 3, 4, 5].includes(S.currentPhaseIndex) && effId === 'holy_light') {
                         // Holy Light: Consume 2 magic for 1 HP
                         if (p.magic >= 2 && !isMirageBlocked) {
                             cardEl.classList.add('ring-2', 'ring-yellow-300', 'cursor-pointer');
                             cardEl.onclick = (e) => { e.stopPropagation(); useHolyLight(aIdx); };
                         }
-                    } else if ([2, 3, 4, 5].includes(currentPhaseIndex) && effId === 'soul_snatch') {
+                    } else if ([2, 3, 4, 5].includes(S.currentPhaseIndex) && effId === 'soul_snatch') {
                         // Soul Snatch: Consume 3 magic to absorb 1 HP
                         if (p.magic >= 3 && !isMirageBlocked) {
                             cardEl.classList.add('ring-2', 'ring-purple-400', 'cursor-pointer');
@@ -4619,20 +4468,20 @@ function renderMobilePlayerBlock(
                         }
                     }
                 }
-                if (!isCurrent && isTop && isActiveEffect && illusionSelectionMode && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(card.effectId)) {
+                if (!isCurrent && isTop && isActiveEffect && S.illusionSelectionMode && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(card.effectId)) {
                     cardEl.classList.add('ring-2', 'ring-teal-500', 'cursor-pointer', 'shadow-2xl', 'z-50');
                     cardEl.onclick = (e) => { e.stopPropagation(); targetIllusion(aIdx); };
                 }
                 slot.appendChild(cardEl);
             });
 
-            if (isCurrent && diceResults.length > 0) {
+            if (isCurrent && S.diceResults.length > 0) {
                 const dicePool = document.createElement('div');
                 // 往上移：讓骰子顯示位置更接近桌機版「浮在場地上方」
                 dicePool.className = 'absolute -top-15 inset-x-0 h-8 pointer-events-none z-30';
                 let leftCount = 0;
                 let rightCount = 0;
-                diceResults.forEach((val, originalIdx) => {
+                S.diceResults.forEach((val, originalIdx) => {
                     const diceArea = Math.floor((val - 1) / 2);
                     if (diceArea !== aIdx) return;
                     const isLeftVal = (val % 2 !== 0);
@@ -4642,17 +4491,17 @@ function renderMobilePlayerBlock(
                     wrapper.style.left = isLeftVal ? 'calc(25% - 12px)' : 'calc(75% - 12px)';
                     // 多顆骰子：改成「往上」堆疊（避免往下蓋到卡牌）
                     wrapper.style.top = `${-countOnSide * 10}px`;
-                    const isSelected = fateSelectedDiceIndices.includes(originalIdx);
-                    const isFrostTarget = frostSelectionMode;
-                    const isLuckyTarget = luckySelectionMode;
+                    const isSelected = S.fateSelectedDiceIndices.includes(originalIdx);
+                    const isFrostTarget = S.frostSelectionMode;
+                    const isLuckyTarget = S.luckySelectionMode;
                     const dIcon = document.createElement('div');
                     const diceColorClass = isSelected ? 'bg-amber-500 text-white ring-amber-300 animate-pulse' : (isFrostTarget ? 'bg-blue-400 text-white ring-blue-200 animate-pulse' : (isLuckyTarget ? 'bg-lime-500 text-white ring-lime-200 animate-pulse' : 'bg-slate-900 text-white ring-white'));
-                    dIcon.className = `w-6 h-6 rounded shadow-xl ring-2 ${diceColorClass} ${fateSelectionMode || frostSelectionMode || luckySelectionMode ? 'cursor-pointer active:scale-95' : ''}`;
+                    dIcon.className = `w-6 h-6 rounded shadow-xl ring-2 ${diceColorClass} ${S.fateSelectionMode || S.frostSelectionMode || S.luckySelectionMode ? 'cursor-pointer active:scale-95' : ''}`;
                     dIcon.innerHTML = renderDiePipsHTML(val);
                     dIcon.setAttribute('aria-label', `骰子 ${val}`);
-                    if (fateSelectionMode) dIcon.onclick = () => toggleDiceIndexSelection(originalIdx);
-                    else if (frostSelectionMode) dIcon.onclick = () => targetFrost(originalIdx);
-                    else if (luckySelectionMode) dIcon.onclick = () => removeLuckyDie(originalIdx);
+                    if (S.fateSelectionMode) dIcon.onclick = () => toggleDiceIndexSelection(originalIdx);
+                    else if (S.frostSelectionMode) dIcon.onclick = () => targetFrost(originalIdx);
+                    else if (S.luckySelectionMode) dIcon.onclick = () => removeLuckyDie(originalIdx);
                     wrapper.appendChild(dIcon);
                     dicePool.appendChild(wrapper);
                 });
@@ -4744,7 +4593,7 @@ function renderMobileHandDrawer(typeColors) {
             });
             p.hand.forEach((card, hIdx) => {
                 const cardEl = document.createElement('div');
-                const isSelected = selectedHandCardIndex === hIdx;
+                const isSelected = S.selectedHandCardIndex === hIdx;
                 // shrink-0：避免被 flex 壓縮，確保可左右滑動
                 const selectable = canPlayMoreCardsThisTurn();
                 cardEl.className = `card-frame shrink-0 shadow-sm group relative transition-all ${selectable ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : ''}`;
@@ -4778,11 +4627,11 @@ function renderMobileLayout(typeColors) {
     container.appendChild(renderMobileTopBar(typeColors));
 
     const oppIdx = getOpponentIndex();
-    const curIdx = currentPlayerIndex;
+    const curIdx = S.currentPlayerIndex;
 
     // Mobile：平常不顯示對手場地以節省空間；但玩家可手動展開。
     // 另外在需要點選對手目標的模式下（例如幻象/閃避）強制顯示。
-    const needsOpponentTargets = illusionSelectionMode || evasionSelectionMode;
+    const needsOpponentTargets = S.illusionSelectionMode || S.evasionSelectionMode;
     const showOpponentBoard = needsOpponentTargets || mobileOpponentBoardOpen;
 
     const scroller = document.createElement('div');
@@ -4925,20 +4774,20 @@ function render() {
     const phaseSection = document.createElement('div');
     phaseSection.className = 'absolute left-[42%] -translate-x-1/2 flex items-center justify-center';
     
-    let displayPhaseHint = phaseHint;
-    if (luckySelectionMode) {
+    let displayPhaseHint = S.phaseHint;
+    if (S.luckySelectionMode) {
         displayPhaseHint = '幸運：移除1骰';
     }
-    if (illusionSelectionMode) {
+    if (S.illusionSelectionMode) {
         displayPhaseHint = '幻象：選對手卡';
     }
 
-    const phaseName = inPreparationPhase ? '準備階段' : PHASE_NAMES[currentPhaseIndex];
+    const phaseName = S.inPreparationPhase ? '準備階段' : PHASE_NAMES[S.currentPhaseIndex];
 
     phaseSection.innerHTML = `
         <div class="relative flex items-center justify-center">
             <div class="flex flex-col items-center justify-center shrink-0">
-                <div class="text-[9px] uppercase font-black text-slate-400 tracking-[0.3em] mb-1">PHASE ${currentPhaseIndex + 1}</div>
+                <div class="text-[9px] uppercase font-black text-slate-400 tracking-[0.3em] mb-1">PHASE ${S.currentPhaseIndex + 1}</div>
                 <div class="px-6 py-1 bg-indigo-600 text-white rounded-full text-sm font-black uppercase tracking-[0.2em] shadow-lg shadow-indigo-100 border-2 border-indigo-400">
                     ${phaseName}
                 </div>
@@ -4960,50 +4809,50 @@ function render() {
     
     const turnBadge = document.createElement('div');
     turnBadge.className = 'px-3 py-1 bg-indigo-50 text-indigo-600 rounded text-[10px] font-black uppercase tracking-wider hidden sm:block';
-    turnBadge.innerText = `${players[currentPlayerIndex].name} 回合`;
+    turnBadge.innerText = `${S.players[S.currentPlayerIndex].name} 回合`;
     rightSection.appendChild(turnBadge);
 
     const actionContainer = document.createElement('div');
     actionContainer.className = 'flex items-center gap-2';
 
     // One-time Preparation Phase action
-    if (winner && winModalDismissed) {
+    if (S.winner && winModalDismissed) {
         const btn = document.createElement('button');
         btn.className = 'px-6 py-2 rounded-lg font-black text-xs uppercase tracking-widest transition-all bg-slate-900 text-white shadow-lg shadow-slate-200 hover:bg-slate-800 active:scale-95';
         btn.innerHTML = '回到首頁 &rarr;';
         btn.onclick = () => goHome();
         actionContainer.appendChild(btn);
-    } else if (winner) {
+    } else if (S.winner) {
         // Winner modal 未關閉時不顯示右側 action（以 modal 為主）
-    } else if (inPreparationPhase) {
+    } else if (S.inPreparationPhase) {
         const btn = document.createElement('button');
-        const prepDone = players[1].cardsPlayedThisTurn >= 1;
+        const prepDone = S.players[1].cardsPlayedThisTurn >= 1;
         btn.className = `px-6 py-2 rounded-lg font-black text-xs uppercase tracking-widest transition-all ${prepDone ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-500 active:scale-95' : 'bg-slate-100 text-slate-300 cursor-not-allowed'}`;
         btn.innerHTML = `開始遊戲 &rarr;`;
         if (prepDone) {
             btn.onclick = () => {
-                inPreparationPhase = false;
+                S.inPreparationPhase = false;
                 // 開始正式流程：先手回合、出牌階段
-                currentPlayerIndex = 0;
-                currentPhaseIndex = 0;
-                selectedHandCardIndex = -1;
-                diceResults = [];
-                skippedPlayBecauseNoHand = false;
+                S.currentPlayerIndex = 0;
+                S.currentPhaseIndex = 0;
+                S.selectedHandCardIndex = -1;
+                S.diceResults = [];
+                S.skippedPlayBecauseNoHand = false;
                 // Mobile：出牌階段時手牌抽屜自動彈出
                 // 並切到手牌 tab
                 mobileDockTab = 'hand';
                 handDrawerOpen = isMobileLayout();
                 // 準備階段的出牌數不應計入正式回合限制
-                players[0].cardsPlayedThisTurn = 0;
-                players[1].cardsPlayedThisTurn = 0;
-                phaseHint = '選牌出牌';
+                S.players[0].cardsPlayedThisTurn = 0;
+                S.players[1].cardsPlayedThisTurn = 0;
+                S.phaseHint = '選牌出牌';
                 render();
             };
         }
         actionContainer.appendChild(btn);
     } else
 
-    if (currentPhaseIndex === 1 && diceResults.length === 0) {
+    if (S.currentPhaseIndex === 1 && S.diceResults.length === 0) {
         const p = getCurrentPlayer();
         // 只有在「出牌階段因為手牌 = 0 而無法出牌」的情況下，擲骰固定 5 顆
         // （也就是：進入擲骰階段時手牌仍為 0，且本回合出牌數為 0）
@@ -5019,16 +4868,16 @@ function render() {
             btn.onclick = () => rollDice(count);
             actionContainer.appendChild(btn);
         });
-    } else if (fateSelectionMode) {
+    } else if (S.fateSelectionMode) {
         const btn = document.createElement('button');
         btn.className = 'bg-amber-600 text-white px-6 py-2 rounded-lg font-black text-xs uppercase tracking-widest transition-all shadow-lg hover:bg-amber-500 active:scale-95';
-        btn.innerText = `確定重擲 (${fateSelectedDiceIndices.length} 顆)`;
+        btn.innerText = `確定重擲 (${S.fateSelectedDiceIndices.length} 顆)`;
         btn.onclick = confirmFate;
         actionContainer.appendChild(btn);
     } else {
         const btn = document.createElement('button');
         const isActionBlocked = getActionBlockReason() !== null;
-        const label = currentPhaseIndex === 6 ? '結束回合' : currentPhaseIndex === 4 ? '結算傷害' : '繼續';
+        const label = S.currentPhaseIndex === 6 ? '結束回合' : S.currentPhaseIndex === 4 ? '結算傷害' : '繼續';
         btn.className = `px-6 py-2 rounded-none font-black text-xs tracking-widest border-2 ${isActionBlocked ? 'bg-[#cbbfa6] text-[#8a7d66] border-[#8a7d66] cursor-not-allowed' : 'bg-[#c48e36] text-[#0d2032] border-[#603b2d] shadow-[3px_3px_0_0_rgba(42,28,16,0.4)] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none'}`;
         btn.innerHTML = `${label} &rarr;`;
         if (!isActionBlocked) btn.onclick = nextPhase;
@@ -5107,8 +4956,8 @@ function render() {
 }
 
 function renderPlayerArea(idx: 0 | 1) {
-    const p = players[idx];
-    const isCurrent = (currentPlayerIndex === idx);
+    const p = S.players[idx];
+    const isCurrent = (S.currentPlayerIndex === idx);
     const area = document.createElement('div');
     // Horizontal structure: [Stats & Queue] [Board] [Hand]
     // 右側手牌欄加寬一點（但不改中間場地三區本來的排版邏輯）
@@ -5180,7 +5029,7 @@ function renderPlayerArea(idx: 0 | 1) {
 
     [0, 1, 2].forEach(aIdx => {
         const zone = document.createElement('div');
-        zone.className = `relative flex flex-col items-center gap-1 p-3 rounded-none transition-all border-2 border-transparent ${currentPhaseIndex === 2 && diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
+        zone.className = `relative flex flex-col items-center gap-1 p-3 rounded-none transition-all border-2 border-transparent ${S.currentPhaseIndex === 2 && S.diceResults.some(d => Math.floor((d-1)/2) === aIdx) ? 'bg-[#d0c954]/35 border-[#603b2d]' : 'bg-transparent'}`;
         
         zone.innerHTML = `
             <div class="w-full flex items-center justify-center pt-2 pb-5">
@@ -5189,11 +5038,11 @@ function renderPlayerArea(idx: 0 | 1) {
         `;
 
         const slot = document.createElement('div');
-        slot.className = `minimal-slot w-[160px] h-[140px] border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1 ? 'hover:border-[#603b2d] cursor-pointer hover:bg-white' : ''}`;
+        slot.className = `minimal-slot w-[160px] h-[140px] border-[3px] border-dashed border-[#603b2d]/45 bg-white/55 rounded-none relative transition-all ${isCurrent && S.currentPhaseIndex === 0 && S.selectedHandCardIndex !== -1 ? 'hover:border-[#603b2d] cursor-pointer hover:bg-white' : ''}`;
         applySlotHeight(slot, getSlotMinHeightPx(p.board[aIdx].length, 90, 140), 140);
         if (isCurrent && canPlayMoreCardsThisTurn()) slot.setAttribute('data-play-zone', String(aIdx));
         
-        if (isCurrent && currentPhaseIndex === 0 && selectedHandCardIndex !== -1) {
+        if (isCurrent && S.currentPhaseIndex === 0 && S.selectedHandCardIndex !== -1) {
             slot.onclick = () => playToBoard(aIdx);
         }
 
@@ -5210,17 +5059,17 @@ function renderPlayerArea(idx: 0 | 1) {
         let isFullyBlocked = false;
 
         // NEW: In Defense (3) or Damage (4) Phase, for opponent's attacks, subtract the current player's defense
-        if (!isCurrent && (currentPhaseIndex === 3 || currentPhaseIndex === 4)) {
+        if (!isCurrent && (S.currentPhaseIndex === 3 || S.currentPhaseIndex === 4)) {
             const currentPlayer = getCurrentPlayer();
             displayVal = Math.max(0, atkVal - currentPlayer.defense);
             if (displayVal <= 0) isFullyBlocked = true;
         }
 
         // Evasion Targeting: If current player is in evasion mode AND we are looking at opponent's board
-        const canBeDodged = !isCurrent && evasionSelectionMode;
-        const isChargeTarget = isCurrent && chargeSelectionMode;
-        const isReproductionTarget = isCurrent && reproductionSelectionMode;
-        const isFlareTarget = isCurrent && flareSelectionMode;
+        const canBeDodged = !isCurrent && S.evasionSelectionMode;
+        const isChargeTarget = isCurrent && S.chargeSelectionMode;
+        const isReproductionTarget = isCurrent && S.reproductionSelectionMode;
+        const isFlareTarget = isCurrent && S.flareSelectionMode;
         
         const bgColor = isFullyBlocked ? 'bg-slate-400' : 'bg-red-500';
         const activeColor = (isChargeTarget || canBeDodged || isReproductionTarget || isFlareTarget) ? 'bg-amber-500 scale-110 ring-2 ring-amber-200 cursor-pointer animate-pulse' : bgColor;
@@ -5282,14 +5131,14 @@ function renderPlayerArea(idx: 0 | 1) {
         }
  
         // Illusion source high-light
-        if (card.effectId === 'illusion' && isActiveEffect && illusionSelectionMode && illusionSourceAreaIdx === aIdx) {
+        if (card.effectId === 'illusion' && isActiveEffect && S.illusionSelectionMode && S.illusionSourceAreaIdx === aIdx) {
             cardEl.classList.add('ring-2', 'ring-teal-400', 'z-40');
         }
  
         // Lucky high-light
         // User: "掷骰阶段时自动触发 ... 直到选择完成前 [幸運]持续发光"
         // Glow if Phase 1 and (no roll yet OR in removal selection) AND it is your own turn
-        if (effId === 'lucky' && isActiveEffect && isCurrent && currentPhaseIndex === 1 && (diceResults.length === 0 || luckySelectionMode)) {
+        if (effId === 'lucky' && isActiveEffect && isCurrent && S.currentPhaseIndex === 1 && (S.diceResults.length === 0 || S.luckySelectionMode)) {
             cardEl.classList.add('ring-2', 'ring-lime-400', 'z-40');
         }
         
@@ -5328,105 +5177,105 @@ function renderPlayerArea(idx: 0 | 1) {
 
         if (isCurrent && isTop && isActiveEffect) {
             const isMirageBlocked = isMirageActive();
-            if (currentPhaseIndex === 5 && effId === 'charge') {
+            if (S.currentPhaseIndex === 5 && effId === 'charge') {
                 if (p.magic >= 2 && !p.chargeUsedIndices.includes(aIdx) && !isMirageBlocked) {
-                    const isSource = chargeSelectionMode && chargeSourceAreaIdx === aIdx;
+                    const isSource = S.chargeSelectionMode && S.chargeSourceAreaIdx === aIdx;
                     cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useCharge(aIdx); };
                 }
-            } else if (currentPhaseIndex === 5 && effId === 'magic_bullet') {
+            } else if (S.currentPhaseIndex === 5 && effId === 'magic_bullet') {
                 if (p.magic >= 1 && !isMirageBlocked) {
                     cardEl.classList.add('ring-2', 'ring-emerald-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useMagicBullet(aIdx); };
                 }
-            } else if (currentPhaseIndex === 5 && effId === 'amplify') {
+            } else if (S.currentPhaseIndex === 5 && effId === 'amplify') {
                 // Amplify is free: Only pulse if THIS specific area's amplify not used
                 if (!p.amplifyUsedIndices.includes(aIdx) && hasAnyAttackTarget(p)) {
                     cardEl.classList.add('ring-2', 'ring-blue-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useAmplify(aIdx); };
                 }
-            } else if ((currentPhaseIndex === 1 || currentPhaseIndex === 2) && effId === 'fate') {
+            } else if ((S.currentPhaseIndex === 1 || S.currentPhaseIndex === 2) && effId === 'fate') {
                 // Fate: Re-roll dice (usable in Roll phase after roll, or Judging phase)
-                const diceRolled = diceResults.length > 0;
-                if (!p.fateUsedIndices.includes(aIdx) && diceRolled && !luckySelectionMode) {
-                    cardEl.classList.add('ring-2', fateSelectionMode ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
+                const diceRolled = S.diceResults.length > 0;
+                if (!p.fateUsedIndices.includes(aIdx) && diceRolled && !S.luckySelectionMode) {
+                    cardEl.classList.add('ring-2', S.fateSelectionMode ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useFate(aIdx); };
                 }
-            } else if (currentPhaseIndex === 3 && effId === 'dodge') {
+            } else if (S.currentPhaseIndex === 3 && effId === 'dodge') {
                 // Dodge: Ignore incoming attack in Defense Phase
                 const opp = getOpponent();
                 const hasDodgeableAttacks = opp.attackQueue.flat().length > 0;
                 if (!p.evasionUsedIndices.includes(aIdx) && p.magic >= 3 && hasDodgeableAttacks && !isMirageBlocked) {
-                    const isSource = evasionSelectionMode && evasionSourceAreaIdx === aIdx;
+                    const isSource = S.evasionSelectionMode && S.evasionSourceAreaIdx === aIdx;
                     cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useEvasion(aIdx); };
                 }
-            } else if (currentPhaseIndex === 3 && effId === 'barrier') {
+            } else if (S.currentPhaseIndex === 3 && effId === 'barrier') {
                 // Modified Barrier: Consume 3 magic for 3 defense in Defense Phase
                 if (p.magic >= 3 && !p.barrierUsedIndices.includes(aIdx) && !isMirageBlocked) {
                     cardEl.classList.add('ring-2', 'ring-indigo-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useBarrier(aIdx); };
                 }
-            } else if (currentPhaseIndex === 3 && effId === 'shield') {
+            } else if (S.currentPhaseIndex === 3 && effId === 'shield') {
                 // Shield: Consume 2 magic for 1 defense in Defense Phase
                 if (p.magic >= 2 && !isMirageBlocked) {
                     cardEl.classList.add('ring-2', 'ring-blue-300', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useShield(aIdx); };
                 }
-            } else if (currentPhaseIndex === 5 && effId === 'reproduction') {
+            } else if (S.currentPhaseIndex === 5 && effId === 'reproduction') {
                 // Reproduction: Consume 2 magic, make one attack twice
                 if (!p.reproductionUsedIndices.includes(aIdx) && p.magic >= 2 && !isMirageBlocked) {
-                    const isSource = reproductionSelectionMode && reproductionSourceAreaIdx === aIdx;
+                    const isSource = S.reproductionSelectionMode && S.reproductionSourceAreaIdx === aIdx;
                     cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useReproduction(aIdx); };
                 }
-            } else if (currentPhaseIndex === 5 && effId === 'flare') {
+            } else if (S.currentPhaseIndex === 5 && effId === 'flare') {
                 // Flare: Consume 3 magic, double one attack
                 if (!p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && hasAnyAttackTarget(p) && !isMirageBlocked) {
-                    const isSource = flareSelectionMode && flareSourceAreaIdx === aIdx;
+                    const isSource = S.flareSelectionMode && S.flareSourceAreaIdx === aIdx;
                     cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-indigo-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useFlare(aIdx); };
                 }
-            } else if (currentPhaseIndex === 5 && effId === 'thrust') {
+            } else if (S.currentPhaseIndex === 5 && effId === 'thrust') {
                 // Thrust: Double all 1s and 2s
                 const canThrust = hasAnyThrustTarget(p);
                 if (!p.thrustUsedIndices.includes(aIdx) && canThrust) {
                     cardEl.classList.add('ring-2', 'ring-rose-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useThrust(aIdx); };
                 }
-            } else if (currentPhaseIndex === 5 && effId === 'forest') {
+            } else if (S.currentPhaseIndex === 5 && effId === 'forest') {
                 // Forest: Merge all attacks
                 if (!p.forestUsedIndices.includes(aIdx) && p.magic >= 3 && !isMirageBlocked) {
                     cardEl.classList.add('ring-2', 'ring-emerald-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useForest(aIdx); };
                 }
-            } else if (currentPhaseIndex === 1 && effId === 'frost') {
+            } else if (S.currentPhaseIndex === 1 && effId === 'frost') {
                 // Frost: Discard a die for 1-3 extra attack
-                const diceRolled = diceResults.length > 0;
-                if (!p.frostUsedIndices.includes(aIdx) && diceRolled && !luckySelectionMode) {
-                    const isSource = frostSelectionMode && frostSourceAreaIdx === aIdx;
+                const diceRolled = S.diceResults.length > 0;
+                if (!p.frostUsedIndices.includes(aIdx) && diceRolled && !S.luckySelectionMode) {
+                    const isSource = S.frostSelectionMode && S.frostSourceAreaIdx === aIdx;
                     cardEl.classList.add('ring-2', isSource ? 'ring-amber-500' : 'ring-blue-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useFrost(aIdx); };
                 }
-            } else if (currentPhaseIndex === 2 && effId === 'magic_luck') {
+            } else if (S.currentPhaseIndex === 2 && effId === 'magic_luck') {
                 if (p.magic >= 2 && !p.magicLuckUsedIndices.includes(aIdx) && !isMirageBlocked) {
                     cardEl.classList.add('ring-2', 'ring-purple-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useMagicLuck(aIdx); };
                 }
-            } else if (currentPhaseIndex === 2 && card.effectId === 'illusion') {
+            } else if (S.currentPhaseIndex === 2 && card.effectId === 'illusion') {
                 const opp = getOpponent();
                 const hasCopyableCard = opp.activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
                 if (p.magic >= 1 && !p.illusionUsedIndices.includes(aIdx) && !isMirageBlocked && hasCopyableCard) {
                     cardEl.classList.add('ring-2', 'ring-teal-400', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useIllusion(aIdx); };
                 }
-            } else if ([2, 3, 4, 5].includes(currentPhaseIndex) && effId === 'holy_light') {
+            } else if ([2, 3, 4, 5].includes(S.currentPhaseIndex) && effId === 'holy_light') {
                 // Holy Light: Consume 2 magic for 1 HP
                 if (p.magic >= 2 && !isMirageBlocked) {
                     cardEl.classList.add('ring-2', 'ring-yellow-300', 'cursor-pointer');
                     cardEl.onclick = (e) => { e.stopPropagation(); useHolyLight(aIdx); };
                 }
-            } else if ([2, 3, 4, 5].includes(currentPhaseIndex) && effId === 'soul_snatch') {
+            } else if ([2, 3, 4, 5].includes(S.currentPhaseIndex) && effId === 'soul_snatch') {
                 // Soul Snatch: Consume 3 magic to absorb 1 HP
                 if (p.magic >= 3 && !isMirageBlocked) {
                     cardEl.classList.add('ring-2', 'ring-purple-400', 'cursor-pointer');
@@ -5435,7 +5284,7 @@ function renderPlayerArea(idx: 0 | 1) {
             }
         }
         // Opponent card targeting for Illusion
-        if (!isCurrent && isTop && isActiveEffect && illusionSelectionMode && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(card.effectId)) {
+        if (!isCurrent && isTop && isActiveEffect && S.illusionSelectionMode && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(card.effectId)) {
             cardEl.classList.add('ring-2', 'ring-teal-500', 'cursor-pointer', 'shadow-2xl', 'z-50');
             cardEl.onclick = (e) => { e.stopPropagation(); targetIllusion(aIdx); };
         }
@@ -5444,7 +5293,7 @@ function renderPlayerArea(idx: 0 | 1) {
     });
         
         // Dice Pool: Improved stacking visibility
-        if (isCurrent && diceResults.length > 0) {
+        if (isCurrent && S.diceResults.length > 0) {
             const dicePool = document.createElement('div');
             // Adjusted -top-18 to grant room for 8px stack height
             dicePool.className = 'absolute -top-18 inset-x-0 h-8 pointer-events-none z-30';
@@ -5452,7 +5301,7 @@ function renderPlayerArea(idx: 0 | 1) {
             let leftCount = 0;
             let rightCount = 0;
 
-            diceResults.forEach((val, originalIdx) => {
+            S.diceResults.forEach((val, originalIdx) => {
                 const diceArea = Math.floor((val - 1) / 2);
                 if (diceArea !== aIdx) return;
 
@@ -5467,19 +5316,19 @@ function renderPlayerArea(idx: 0 | 1) {
                 // 多顆骰子：改成「往上」堆疊（避免往下蓋到卡牌）
                 wrapper.style.top = `${-countOnSide * 10}px`; 
                 
-                const isSelected = fateSelectedDiceIndices.includes(originalIdx);
-                const isFrostTarget = frostSelectionMode;
-                const isLuckyTarget = luckySelectionMode;
+                const isSelected = S.fateSelectedDiceIndices.includes(originalIdx);
+                const isFrostTarget = S.frostSelectionMode;
+                const isLuckyTarget = S.luckySelectionMode;
 
                 const dIcon = document.createElement('div');
                 // Smaller dice w-6 (24px)
                 const diceColorClass = isSelected ? 'bg-amber-500 text-white ring-amber-300 animate-pulse' : (isFrostTarget ? 'bg-blue-400 text-white ring-blue-200 animate-pulse' : (isLuckyTarget ? 'bg-lime-500 text-white ring-lime-200 animate-pulse' : 'bg-slate-900 text-white ring-white'));
-                dIcon.className = `w-6 h-6 rounded shadow-xl ring-2 ${diceColorClass} ${fateSelectionMode || frostSelectionMode || luckySelectionMode ? 'cursor-pointer hover:scale-110 active:scale-95' : ''}`;
+                dIcon.className = `w-6 h-6 rounded shadow-xl ring-2 ${diceColorClass} ${S.fateSelectionMode || S.frostSelectionMode || S.luckySelectionMode ? 'cursor-pointer hover:scale-110 active:scale-95' : ''}`;
                 dIcon.innerHTML = renderDiePipsHTML(val);
                 dIcon.setAttribute('aria-label', `骰子 ${valStr}`);
-                if (fateSelectionMode) dIcon.onclick = () => toggleDiceIndexSelection(originalIdx);
-                else if (frostSelectionMode) dIcon.onclick = () => targetFrost(originalIdx);
-                else if (luckySelectionMode) dIcon.onclick = () => removeLuckyDie(originalIdx);
+                if (S.fateSelectionMode) dIcon.onclick = () => toggleDiceIndexSelection(originalIdx);
+                else if (S.frostSelectionMode) dIcon.onclick = () => targetFrost(originalIdx);
+                else if (S.luckySelectionMode) dIcon.onclick = () => removeLuckyDie(originalIdx);
                 wrapper.appendChild(dIcon);
                 dicePool.appendChild(wrapper);
             });
@@ -5512,7 +5361,7 @@ function renderPlayerArea(idx: 0 | 1) {
     });
     p.hand.forEach((card, hIdx) => {
         const cardEl = document.createElement('div');
-        const isSelected = (isCurrent && selectedHandCardIndex === hIdx);
+        const isSelected = (isCurrent && S.selectedHandCardIndex === hIdx);
 
         const selectable = isCurrent && canPlayMoreCardsThisTurn();
         cardEl.className = `card-frame shadow-sm group relative transition-all ${selectable ? 'cursor-pointer' : 'opacity-60'} ${isSelected ? 'border-blue-500 ring-2 ring-blue-300 shadow-[0_0_0_4px_rgba(59,130,246,0.35)] scale-105' : (selectable ? 'hover:-translate-y-1 hover:border-slate-400' : '')}`;
@@ -5548,7 +5397,7 @@ window.addEventListener('resize', () => {
     if (now !== lastIsMobileLayout) {
         lastIsMobileLayout = now;
         // 切到 Mobile 且正在出牌階段：自動彈出手牌抽屜；其他情況預設收合
-        if (now && currentPhaseIndex === 0) {
+        if (now && S.currentPhaseIndex === 0) {
             mobileDockTab = 'hand';
             handDrawerOpen = true;
         } else {
@@ -5561,7 +5410,7 @@ window.addEventListener('orientationchange', () => {
     const now = isMobileLayout();
     if (now !== lastIsMobileLayout) {
         lastIsMobileLayout = now;
-        if (now && currentPhaseIndex === 0) {
+        if (now && S.currentPhaseIndex === 0) {
             mobileDockTab = 'hand';
             handDrawerOpen = true;
         } else {

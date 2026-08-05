@@ -1,6 +1,18 @@
-import {CARD_DEFS, type CardAttr} from '../cards';
+import type {CardAttr} from '../cards';
 // 與 UI 共用同一份規則型別與純計算（見 src/engine/state.ts）
 import {type GameCard, type PlayerState, createPlayer} from '../engine/state';
+import {
+  buildDeck,
+  drawFromDeck,
+  getDeckDrawCost,
+  getEffectiveEffectId,
+  getMarketPrice,
+  hasActiveEffect,
+  isMirageActive,
+  refillMarket,
+  shuffled,
+} from '../engine/deck';
+import {isMagicSpendActivation, listActivations} from '../engine/activations';
 import {getBaseAttrForDie} from '../basebars';
 
 
@@ -161,24 +173,8 @@ function binomialProbAtLeast(successes: number, trials: number, probability: num
   return Math.max(0, 1 - cumulative);
 }
 
-const MAGIC_SPEND_EFFECT_IDS = new Set([
-  'charge',
-  'reproduction',
-  'flare',
-  'magic_bullet',
-  'dodge',
-  'shield',
-  'barrier',
-  'forest',
-  'holy_light',
-  'soul_snatch',
-  'magic_luck',
-  'illusion',
-]);
-
-function isMagicSpendEffect(effectId: string | null | undefined) {
-  return !!effectId && MAGIC_SPEND_EFFECT_IDS.has(effectId);
-}
+// 哪些效果要花魔力，由 engine/activations.ts 的條件表決定（與 UI 同一份）。
+const isMagicSpendEffect = isMagicSpendActivation;
 
 function baseAiAttrValue(attr: CardAttr) {
   return (AI_ATTR_WEIGHTS[attr.type] || 1) * attr.value;
@@ -189,17 +185,6 @@ function aiEffectWeight(effectId: string | null | undefined) {
   return AI_EFFECT_WEIGHTS[effectId] ?? 4;
 }
 
-function createCard(def: (typeof CARD_DEFS)[number], id: number): GameCard {
-  return {
-    id: `card_${id}`,
-    left: def.left,
-    right: def.right,
-    effectId: def.effectId,
-    effectName: def.name,
-    effectDesc: def.desc,
-    name: def.name,
-  };
-}
 
 
 class SimulationGame {
@@ -235,8 +220,7 @@ class SimulationGame {
   }
 
   private initGame() {
-    this.deck = CARD_DEFS.map((def, idx) => createCard(def, idx));
-    shuffleInPlace(this.deck);
+    this.deck = shuffled(buildDeck());
 
     const p0InitialHandSize = this.openingMode === 'staged' ? 4 : 3;
     const p1InitialHandSize = this.openingMode === 'even' ? 3 : this.openingMode === 'staged' ? 5 : 4;
@@ -334,7 +318,7 @@ class SimulationGame {
   }
 
   private drawFromDeck() {
-    return this.deck.pop() ?? null;
+    return drawFromDeck(this.deck);
   }
 
   private drawCards(count: number) {
@@ -347,43 +331,27 @@ class SimulationGame {
   }
 
   private refillMarket() {
-    const remaining = this.market.filter((c): c is GameCard => Boolean(c));
-    const next: Array<GameCard | null> = [null, null, null];
-    for (let i = remaining.length - 1; i >= 0; i--) {
-      const targetIdx = 2 - ((remaining.length - 1) - i);
-      if (targetIdx >= 0) next[targetIdx] = remaining[i];
-    }
-    for (let i = 2; i >= 0; i--) {
-      if (!next[i]) next[i] = this.drawFromDeck();
-    }
-    this.market = next;
+    this.market = refillMarket(this.market, this.deck);
   }
 
   private deckDrawCost(drawIndex: number) {
-    if (drawIndex <= 0) return 0;
-    if (drawIndex === 1) return 0;
-    if (drawIndex === 2) return 1;
-    if (drawIndex === 3) return 2;
-    return Infinity;
+    return getDeckDrawCost(drawIndex);
   }
 
   private marketPrice(slotIdx: 0 | 1 | 2) {
-    return slotIdx === 0 ? 3 : slotIdx === 1 ? 2 : 1;
+    return getMarketPrice(slotIdx);
   }
 
   private getEffectiveEffectId(p: PlayerState, areaIdx: number) {
-    const card = p.activeAreaEffects[areaIdx];
-    if (!card) return null;
-    if (card.effectId === 'illusion') return p.illusionCopiedEffectIds[areaIdx] || 'illusion';
-    return card.effectId;
+    return getEffectiveEffectId(p, areaIdx);
   }
 
   private isMirageActive() {
-    return this.players.some(p => p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'mirage'));
+    return isMirageActive(this.players);
   }
 
   private hasExpertEffect(p: PlayerState, effectId: string) {
-    return p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === effectId);
+    return hasActiveEffect(p, effectId);
   }
 
   private hasHandEffect(p: PlayerState, effectId: string) {
@@ -1279,100 +1247,52 @@ class SimulationGame {
     }
   }
 
+  /*
+   * 可發動效果的條件表與 UI 共用（見 src/engine/activations.ts）。
+   * 這裡以前是一份和 UI 幾乎一字不差的 90 行 if 串 —— 兩份手抄的規則沒有任何
+   * 機制保證同步，而 AI 正是靠這個模擬器判斷「這樣打值不值得」。
+   * label 沿用 effectId，因為模擬器的評分是直接比對 id。
+   */
   private availableActivations(): Array<{label: string; run: () => void}> {
     const p = this.currentPlayer();
-    const acts: Array<{label: string; run: () => void}> = [];
-    const mirageBlocked = this.isMirageActive();
+    const opp = this.opponent();
+    const runners: Record<string, (areaIdx: number) => void> = {
+      fate: aIdx => this.useFate(aIdx),
+      frost: aIdx => this.useFrost(aIdx),
+      magic_luck: aIdx => this.useMagicLuck(aIdx),
+      illusion: aIdx => this.useIllusion(aIdx),
+      dodge: aIdx => this.useEvasion(aIdx),
+      shield: aIdx => this.useShield(aIdx),
+      barrier: aIdx => this.useBarrier(aIdx),
+      amplify: aIdx => this.useAmplify(aIdx),
+      magic_bullet: aIdx => this.useMagicBullet(aIdx),
+      thrust: aIdx => this.useThrust(aIdx),
+      forest: aIdx => this.useForest(aIdx),
+      charge: aIdx => this.useCharge(aIdx),
+      reproduction: aIdx => this.useReproduction(aIdx),
+      flare: aIdx => this.useFlare(aIdx),
+      holy_light: aIdx => this.useHolyLight(aIdx),
+      soul_snatch: aIdx => this.useSoulSnatch(aIdx),
+    };
 
-    if (this.currentPhaseIndex === 1 && this.diceResults.length > 0) {
-      for (let aIdx = 0; aIdx < 3; aIdx++) {
-        if (this.getEffectiveEffectId(p, aIdx) === 'fate' && !p.fateUsedIndices.includes(aIdx)) {
-          acts.push({label: 'fate', run: () => this.useFate(aIdx)});
-        }
-        if (this.getEffectiveEffectId(p, aIdx) === 'frost' && !p.frostUsedIndices.includes(aIdx)) {
-          acts.push({label: 'frost', run: () => this.useFrost(aIdx)});
-        }
-      }
-    }
-
-    if (this.currentPhaseIndex === 2) {
-      for (let aIdx = 0; aIdx < 3; aIdx++) {
-        const eff = this.getEffectiveEffectId(p, aIdx);
-        if (eff === 'fate' && !p.fateUsedIndices.includes(aIdx) && this.diceResults.length > 0) {
-          acts.push({label: 'fate', run: () => this.useFate(aIdx)});
-        }
-        if (eff === 'magic_luck' && !p.magicLuckUsedIndices.includes(aIdx) && p.magic >= 2 && !mirageBlocked) {
-          acts.push({label: 'magic_luck', run: () => this.useMagicLuck(aIdx)});
-        }
-        if (p.activeAreaEffects[aIdx]?.effectId === 'illusion' && !p.illusionUsedIndices.includes(aIdx) && p.magic >= 1 && !mirageBlocked) {
-          const hasCopyableCard = this.opponent().activeAreaEffects.some(c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId));
-          if (hasCopyableCard) acts.push({label: 'illusion', run: () => this.useIllusion(aIdx)});
-        }
-      }
-    }
-
-    if (this.currentPhaseIndex === 3) {
-      const oppTargets = this.listOpponentDodgeTargets();
-      for (let aIdx = 0; aIdx < 3; aIdx++) {
-        const eff = this.getEffectiveEffectId(p, aIdx);
-        if (eff === 'dodge' && !p.evasionUsedIndices.includes(aIdx) && p.magic >= 3 && oppTargets.length > 0 && !mirageBlocked) {
-          acts.push({label: 'dodge', run: () => this.useEvasion(aIdx)});
-        }
-        if (eff === 'shield' && p.magic >= 2 && !mirageBlocked) {
-          acts.push({label: 'shield', run: () => this.useShield(aIdx)});
-        }
-        if (eff === 'barrier' && !p.barrierUsedIndices.includes(aIdx) && p.magic >= 3 && !mirageBlocked) {
-          acts.push({label: 'barrier', run: () => this.useBarrier(aIdx)});
-        }
-      }
-    }
-
-    if (this.currentPhaseIndex === 4) {
-      this.addLifeActivations(acts, p, mirageBlocked);
-    }
-
-    if (this.currentPhaseIndex === 5) {
-      const selfTargets = this.listSelfAttackTargets();
-      for (let aIdx = 0; aIdx < 3; aIdx++) {
-        const eff = this.getEffectiveEffectId(p, aIdx);
-        if (eff === 'amplify' && !p.amplifyUsedIndices.includes(aIdx) && this.hasAnyAttackTarget(p)) {
-          acts.push({label: 'amplify', run: () => this.useAmplify(aIdx)});
-        }
-        if (eff === 'magic_bullet' && p.magic >= 1 && !mirageBlocked) {
-          acts.push({label: 'magic_bullet', run: () => this.useMagicBullet(aIdx)});
-        }
-        if (eff === 'thrust' && !p.thrustUsedIndices.includes(aIdx) && this.hasAnyThrustTarget(p)) {
-          acts.push({label: 'thrust', run: () => this.useThrust(aIdx)});
-        }
-        if (eff === 'forest' && !p.forestUsedIndices.includes(aIdx) && p.magic >= 3 && !mirageBlocked) {
-          acts.push({label: 'forest', run: () => this.useForest(aIdx)});
-        }
-        if (eff === 'charge' && !p.chargeUsedIndices.includes(aIdx) && p.magic >= 2 && selfTargets.length > 0 && !mirageBlocked) {
-          acts.push({label: 'charge', run: () => this.useCharge(aIdx)});
-        }
-        if (eff === 'reproduction' && !p.reproductionUsedIndices.includes(aIdx) && p.magic >= 2 && selfTargets.length > 0 && !mirageBlocked) {
-          acts.push({label: 'reproduction', run: () => this.useReproduction(aIdx)});
-        }
-        if (eff === 'flare' && !p.flareUsedIndices.includes(aIdx) && p.magic >= 3 && selfTargets.length > 0 && !mirageBlocked) {
-          acts.push({label: 'flare', run: () => this.useFlare(aIdx)});
-        }
-      }
-      this.addLifeActivations(acts, p, mirageBlocked);
-    }
-
-    return acts;
-  }
-
-  private addLifeActivations(acts: Array<{label: string; run: () => void}>, p: PlayerState, mirageBlocked: boolean) {
-    for (let aIdx = 0; aIdx < 3; aIdx++) {
-      const eff = this.getEffectiveEffectId(p, aIdx);
-      if (eff === 'holy_light' && p.magic >= 2 && !mirageBlocked) {
-        acts.push({label: 'holy_light', run: () => this.useHolyLight(aIdx)});
-      }
-      if (eff === 'soul_snatch' && p.magic >= 3 && !mirageBlocked) {
-        acts.push({label: 'soul_snatch', run: () => this.useSoulSnatch(aIdx)});
-      }
-    }
+    return listActivations({
+      phaseIndex: this.currentPhaseIndex,
+      player: p,
+      opponent: opp,
+      diceCount: this.diceResults.length,
+      opponentDodgeTargetCount: this.listOpponentDodgeTargets().length,
+      selfAttackTargetCount: this.listSelfAttackTargets().length,
+      hasAnyAttackTarget: this.hasAnyAttackTarget(p),
+      hasAnyThrustTarget: this.hasAnyThrustTarget(p),
+      hasCopyableOpponentCard: opp.activeAreaEffects.some(
+        c => c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId),
+      ),
+      // 模擬器沒有「等待玩家選取」這個中間狀態，一律不擋
+      blockedBySelection: false,
+    }).map(({effectId, areaIdx}) => ({
+      label: effectId,
+      run: () => runners[effectId]?.(areaIdx),
+    }));
   }
 
   private useFate(areaIdx: number) {
