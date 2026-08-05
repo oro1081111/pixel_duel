@@ -14,6 +14,7 @@ import {
     createGameState,
     damageThroughDefense,
 } from './engine/state';
+import {resolveDamagePhase, resolveJudging} from './engine/resolve';
 import {
     getActivationMagicCost,
     isMagicSpendActivation,
@@ -2542,158 +2543,8 @@ function isMirageActive() {
 }
 
 function handleJudging() {
-    const p = getCurrentPlayer();
-    const pIdx = S.currentPlayerIndex;
-    p.magic = 0;
-    p.gold = 0;
-    p.defense = 0;
-    p.breakthroughApplied = false;
-    const areaSums = [0, 0, 0];
-    const areaDefense = [0, 0, 0];
-    const areaMagic = [0, 0, 0];
-    const areaGold = [0, 0, 0];
-
-    const diceCountsPerArea = [0, 0, 0];
-    S.diceResults.forEach(val => {
-        const areaIdx = Math.floor((val - 1) / 2);
-        diceCountsPerArea[areaIdx]++;
-        const isLeft = (val % 2 !== 0); 
-        const stack = p.board[areaIdx];
-        
-        // 1. Add Base Attribute (editable table: src/basebars.ts)
-        const base = getBaseAttrForDie(pIdx as 0 | 1, val);
-        if (base.type === 'attack') areaSums[areaIdx] += base.value;
-        else if (base.type === 'defense') areaDefense[areaIdx] += base.value;
-        else if (base.type === 'magic') areaMagic[areaIdx] += base.value;
-        else if (base.type === 'gold') areaGold[areaIdx] += base.value;
-
-        // 2. Add Card Attributes (type + value)
-        stack.forEach(card => {
-            const a = isLeft ? card.left : card.right;
-            if (a.type === 'attack') areaSums[areaIdx] += a.value;
-            else if (a.type === 'defense') areaDefense[areaIdx] += a.value;
-            else if (a.type === 'magic') areaMagic[areaIdx] += a.value;
-            else if (a.type === 'gold') areaGold[areaIdx] += a.value;
-        });
-    });
-
-    // Save base stats for potential later Breakthrough trigger
-    p.turnBaseStats = {
-        sums: [...areaSums],
-        defense: [...areaDefense],
-        magic: [...areaMagic],
-        gold: [...areaGold]
-    };
-
-    // Breakthrough Effect: Initial check
-    let breakthroughCardIdx = -1;
-    for (let i = 0; i < 3; i++) {
-        if (getEffectiveEffectId(p, i) === 'breakthrough') {
-            breakthroughCardIdx = i;
-            break;
-        }
-    }
-
-    if (breakthroughCardIdx !== -1 && p.hp <= 3) {
-        addLog(`[臨界突破]判定成功，所有數值翻倍！`);
-        for (let i = 0; i < 3; i++) {
-            areaSums[i] *= 2;
-            areaDefense[i] *= 2;
-            areaMagic[i] *= 2;
-            areaGold[i] *= 2;
-        }
-        p.breakthroughApplied = true;
-    }
-    p.gold = areaGold.reduce((a, b) => a + b, 0);
-
-    // Apply Surge Effect
-    p.activeAreaEffects.forEach((card, aIdx) => {
-        if (getEffectiveEffectId(p, aIdx) === 'surge') {
-            if (areaMagic[aIdx] > 0) {
-                const bonus = areaMagic[aIdx];
-                areaMagic[aIdx] *= 2;
-                addLog(`[摩能湧動] ${aIdx + 1} 魔力翻倍: ${bonus} -> ${areaMagic[aIdx]}`);
-            }
-        }
-    });
-
-    // Magic income (before spending in judging)
-    p.magic = areaMagic.reduce((a, b) => a + b, 0);
-
-    // [Mirage] Bonus Attributes
-    p.activeAreaEffects.forEach((card, aIdx) => {
-        if (getEffectiveEffectId(p, aIdx) === 'mirage') {
-            areaSums[aIdx] += 2;
-            areaDefense[aIdx] += 1;
-            addLog(`[幻境] 區域 ${aIdx + 1} 基本攻擊額外 +2，防禦力額外 +1`);
-        }
-    });
-
-    // [Diversion] Effect: Automatic check after base magic is summed
-    const hasDiversion = p.activeAreaEffects.some((_, i) => getEffectiveEffectId(p, i) === 'diversion');
-    if (hasDiversion && p.magic <= 2) {
-        const oldMagic = p.magic;
-        p.magic = 5;
-        addLog(`[導流] 判定魔力(${oldMagic}) <= 2，自動啟動導流提升至 5 點魔力`);
-    }
-
-    // Apply persistent expenditure correction (Subtract costs paid this phase)
-    // Note: only subtract ONCE; otherwise magic costs (e.g. 魔運之石) will be double-charged.
-    p.magic = Math.max(0, p.magic - p.magicSpentInJudging);
-
-    // 3. Apply Flame Shield Effect (Before setting global defense)
-    p.activeAreaEffects.forEach((card, aIdx) => {
-        const effId = getEffectiveEffectId(p, aIdx);
-        if (effId === 'flame_shield') {
-            const def = areaDefense[aIdx];
-            if (def > 0) {
-                areaSums[aIdx] += def * 2;
-                addLog(`[炎盾] 區域 ${aIdx + 1} 轉化 ${def} 點防禦為 ${def * 2} 點攻擊`);
-                areaDefense[aIdx] = 0; // "強制視為" means it's no longer defense
-            }
-        }
-        if (effId === 'brilliance') {
-            const diceCount = diceCountsPerArea[aIdx];
-            if (diceCount >= 3) {
-                areaSums[aIdx] += 7;
-                addLog(`[光輝] 區域 ${aIdx + 1} 檢測到 ${diceCount} 顆骰子(>=3)，攻擊力額外 +7`);
-            }
-        }
-    });
-
-    p.defense = areaDefense.reduce((a, b) => a + b, 0);
-    p.currentAttacks = areaSums.map((s, idx) => {
-        const list = [s];
-        if (p.extraFrostAttacks && p.extraFrostAttacks[idx]) {
-            list.push(...p.extraFrostAttacks[idx]);
-        }
-        return list;
-    });
-    p.piercingAttacks = [[], [], []];
-
-    // 4. Add Piercing Ambush & Gale & Shadow
-    p.activeAreaEffects.forEach((card, aIdx) => {
-        const effId = getEffectiveEffectId(p, aIdx);
-        if (effId === 'ambush') {
-            p.piercingAttacks[aIdx].push(1);
-        }
-        if (effId === 'gale') {
-            const bonus = diceCountsPerArea[aIdx];
-            if (bonus > 0) {
-                p.piercingAttacks[aIdx].push(bonus);
-                addLog(`[疾風] 區域 ${aIdx + 1} 檢測到 ${bonus} 顆骰子，造成 ${bonus} 點無法防禦傷害`);
-            }
-        }
-        if (effId === 'shadow') {
-            const diceCount = diceCountsPerArea[aIdx];
-            if (diceCount === 0) {
-                p.piercingAttacks[aIdx].push(3);
-                addLog(`[暗影] 區域 ${aIdx + 1} 無任何骰子，造成 3 點無法防禦傷害`);
-            }
-        }
-    });
-
-    addLog(`合計: 攻[${p.currentAttacks.map(v=>v.reduce((a,b)=>a+b,0))}], 防:${p.defense}, 魔:${p.magic}, 金:${p.gold}`);
+    // 判定的規則本體在 engine/resolve.ts，與模擬器共用同一份
+    resolveJudging(getCurrentPlayer(), S.currentPlayerIndex as 0 | 1, S.diceResults, addLog);
 }
 
 function handleDefensePhaseStart() {
@@ -2716,116 +2567,15 @@ function handleDamagePhase() {
     const p = getCurrentPlayer();
     const opp = getOpponent();
 
-    if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) {
-        return;
-    }
+    // 先手第一回合不會受到攻擊（對手還沒行動過）
+    if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) return;
 
     addLog('--- 傷害階段 ---');
-    const hpBeforeDamage = p.hp;
-    p.contractTriggeredAreaIdx = -1; // Reset highlight at start of damage phase
-
-    // [Backfire] Effect: Automatic check
-    const backfireCount = p.activeAreaEffects.filter((_, i) => getEffectiveEffectId(p, i) === 'backfire').length;
-    
-    if (backfireCount > 0) {
-        addLog(`[檢測] 玩家持有 ${backfireCount} 張「反噬」...`);
-        const normalHits = opp.attackQueue.flat();
-        
-        // Success if: opponent has NO normal attacks, OR all are blocked by defense
-        const successfullyDefended = normalHits.length === 0 || normalHits.every(atk => Math.max(0, atk - p.defense) <= 0);
-        
-        if (successfullyDefended) {
-            addLog(`[效果] 反噬觸發！成功擋下所有普通攻擊 (防禦: ${p.defense})`);
-            p.activeAreaEffects.forEach((c, aIdx) => {
-                if (c && getEffectiveEffectId(p, aIdx) === 'backfire') {
-                    p.piercingAttacks[aIdx].push(2);
-                    addLog(`[反噬] 區域 ${aIdx + 1} 產生 2 點穿透反擊傷害`);
-                }
-            });
-        } else {
-            const blockedAtks = normalHits.filter(atk => atk <= p.defense).length;
-            const failedAtks = normalHits.length - blockedAtks;
-            addLog(`[反噬] 未觸發: 尚有 ${failedAtks} 個攻擊穿透防禦`);
-        }
-    }
-
-    let totalDamage = 0;
-    
-    // Normal Attacks (Blocked by defense)
-    opp.attackQueue.forEach((hits, i) => {
-        hits.forEach(atk => {
-            const dmg = Math.max(0, atk - p.defense);
-            totalDamage += dmg;
-            if (dmg > 0) addLog(`區域 ${i+1} 攻擊 ${atk}: 造成 ${dmg} 傷害`);
-        });
-    });
-
-    // Piercing Attacks (Ignore defense)
-    if (opp.piercingQueue) {
-        opp.piercingQueue.forEach((hits, i) => {
-            hits.forEach(atk => {
-                totalDamage += atk;
-                addLog(`區域 ${i+1} 突擊 ${atk}: 造成 ${atk} 點穿透物理傷害`);
-            });
-        });
-    }
-
-    p.hp -= totalDamage;
+    // 傷害結算的規則本體在 engine/resolve.ts，與模擬器共用同一份
+    const {totalDamage, defeated} = resolveDamagePhase(p, opp, addLog);
     S.phaseHint = `受傷 ${totalDamage}`;
-    if (totalDamage === 0) {
-        addLog(`完美防禦！未受到任何傷害`);
-    } else {
-        addLog(`本輪承受總傷害: ${totalDamage}, 剩餘 HP: ${p.hp}`);
-    }
 
-    // [Contract] Effect: Protection against fatal damage
-    if (p.hp <= 0 && hpBeforeDamage >= 4) {
-        let contractIdx = -1;
-        for (let i = 0; i < 3; i++) {
-            if (getEffectiveEffectId(p, i) === 'contract') {
-                contractIdx = i;
-                break;
-            }
-        }
-        if (contractIdx !== -1) {
-            p.hp = 1;
-            p.contractTriggeredAreaIdx = contractIdx;
-            addLog(`[效果] 契約觸發！受到致命傷但生命曾 >= 4，保存生命點數為 1`);
-        }
-    }
-
-    // Reactive Breakthrough: If HP just dropped to <= 3, apply additional doubling
-    if (p.hp <= 3 && !p.breakthroughApplied) {
-        let breakthroughCardIdx = -1;
-        for (let i = 0; i < 3; i++) {
-            if (getEffectiveEffectId(p, i) === 'breakthrough') {
-                breakthroughCardIdx = i;
-                break;
-            }
-        }
-        if (breakthroughCardIdx !== -1) {
-            addLog(`[突破] 受到攻擊生命降至 <= 3，判定獲得的所有數值 (攻/防/魔/金) 獲得額外翻倍！`);
-            p.magic += p.turnBaseStats.magic.reduce((a, b) => a + b, 0);
-            p.gold += p.turnBaseStats.gold.reduce((a, b) => a + b, 0);
-            p.defense += p.turnBaseStats.defense.reduce((a, b) => a + b, 0);
-            
-            // For attacks, we add the base to each area. 
-            // Note: If Flame Shield was applied, we should technically double that too? 
-            // User: "掷骰获得的所有数值翻倍". Simple addition covers the base doubling.
-            p.turnBaseStats.sums.forEach((s, i) => {
-                if (s > 0) p.currentAttacks[i][0] += s;
-            });
-            p.breakthroughApplied = true;
-        }
-    }
-
-    // Clear opponent's stored attacks after they are processed
-    opp.attackQueue = [[], [], []];
-    opp.piercingQueue = [[], [], []];
-    opp.currentAttacks = [[0], [0], [0]];
-    opp.piercingAttacks = [[], [], []];
-
-    if (p.hp <= 0) {
+    if (defeated) {
         S.winner = opp.name;
         winModalDismissed = false;
     }

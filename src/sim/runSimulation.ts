@@ -13,6 +13,7 @@ import {
   shuffled,
 } from '../engine/deck';
 import {isMagicSpendActivation, listActivations} from '../engine/activations';
+import {resolveDamagePhase, resolveJudging} from '../engine/resolve';
 import {getBaseAttrForDie} from '../basebars';
 
 
@@ -1030,172 +1031,22 @@ class SimulationGame {
     }
   }
 
+  // 判定的規則本體在 engine/resolve.ts，與 UI 共用同一份
   private handleJudging() {
-    const p = this.currentPlayer();
-    const pIdx = this.currentPlayerIndex;
-    p.magic = 0;
-    p.gold = 0;
-    p.defense = 0;
-    p.breakthroughApplied = false;
-
-    const areaSums = [0, 0, 0];
-    const areaDefense = [0, 0, 0];
-    const areaMagic = [0, 0, 0];
-    const areaGold = [0, 0, 0];
-    const diceCountsPerArea = [0, 0, 0];
-
-    this.diceResults.forEach(val => {
-      const areaIdx = Math.floor((val - 1) / 2);
-      diceCountsPerArea[areaIdx]++;
-      const isLeft = val % 2 !== 0;
-      const base = getBaseAttrForDie(pIdx, val);
-      this.addAttr(base, areaSums, areaDefense, areaMagic, areaGold, areaIdx);
-      p.board[areaIdx].forEach(card => {
-        this.addAttr(isLeft ? card.left : card.right, areaSums, areaDefense, areaMagic, areaGold, areaIdx);
-      });
-    });
-
-    p.turnBaseStats = {
-      sums: [...areaSums],
-      defense: [...areaDefense],
-      magic: [...areaMagic],
-      gold: [...areaGold],
-    };
-
-    if (this.hasEffect(p, 'breakthrough') && p.hp <= 3) {
-      for (let i = 0; i < 3; i++) {
-        areaSums[i] *= 2;
-        areaDefense[i] *= 2;
-        areaMagic[i] *= 2;
-        areaGold[i] *= 2;
-      }
-      p.breakthroughApplied = true;
-    }
-
-    p.gold = areaGold.reduce((a, b) => a + b, 0);
-
-    p.activeAreaEffects.forEach((_, aIdx) => {
-      if (this.getEffectiveEffectId(p, aIdx) === 'surge' && areaMagic[aIdx] > 0) {
-        areaMagic[aIdx] *= 2;
-      }
-    });
-
-    p.magic = areaMagic.reduce((a, b) => a + b, 0);
-
-    p.activeAreaEffects.forEach((_, aIdx) => {
-      if (this.getEffectiveEffectId(p, aIdx) === 'mirage') {
-        areaSums[aIdx] += 2;
-        areaDefense[aIdx] += 1;
-      }
-    });
-
-    if (this.hasEffect(p, 'diversion') && p.magic <= 2) p.magic = 5;
-    p.magic = Math.max(0, p.magic - p.magicSpentInJudging);
-
-    p.activeAreaEffects.forEach((_, aIdx) => {
-      const effId = this.getEffectiveEffectId(p, aIdx);
-      if (effId === 'flame_shield') {
-        const def = areaDefense[aIdx];
-        if (def > 0) {
-          areaSums[aIdx] += def * 2;
-          areaDefense[aIdx] = 0;
-        }
-      }
-      if (effId === 'brilliance' && diceCountsPerArea[aIdx] >= 3) {
-        areaSums[aIdx] += 7;
-      }
-    });
-
-    p.defense = areaDefense.reduce((a, b) => a + b, 0);
-    p.currentAttacks = areaSums.map((s, idx) => {
-      const list = [s];
-      if (p.extraFrostAttacks[idx]) list.push(...p.extraFrostAttacks[idx]);
-      return list;
-    });
-    p.piercingAttacks = [[], [], []];
-
-    p.activeAreaEffects.forEach((_, aIdx) => {
-      const effId = this.getEffectiveEffectId(p, aIdx);
-      if (effId === 'ambush') p.piercingAttacks[aIdx].push(1);
-      if (effId === 'gale') {
-        const bonus = diceCountsPerArea[aIdx];
-        if (bonus > 0) p.piercingAttacks[aIdx].push(bonus);
-      }
-      if (effId === 'shadow' && diceCountsPerArea[aIdx] === 0) {
-        p.piercingAttacks[aIdx].push(3);
-      }
-    });
-  }
-
-  private addAttr(attr: CardAttr, areaSums: number[], areaDefense: number[], areaMagic: number[], areaGold: number[], areaIdx: number) {
-    if (attr.type === 'attack') areaSums[areaIdx] += attr.value;
-    else if (attr.type === 'defense') areaDefense[areaIdx] += attr.value;
-    else if (attr.type === 'magic') areaMagic[areaIdx] += attr.value;
-    else if (attr.type === 'gold') areaGold[areaIdx] += attr.value;
+    resolveJudging(this.currentPlayer(), this.currentPlayerIndex as 0 | 1, this.diceResults);
   }
 
   private hasEffect(p: PlayerState, effectId: string) {
     return p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === effectId);
   }
 
+  // 傷害結算的規則本體在 engine/resolve.ts，與 UI 共用同一份
   private handleDamagePhase() {
-    const p = this.currentPlayer();
-    const opp = this.opponent();
-
+    // 先手第一回合不會受到攻擊（對手還沒行動過）
     if (this.currentPlayerIndex === 0 && this.firstPlayerFirstTurn) return;
 
-    const hpBeforeDamage = p.hp;
-    p.contractTriggeredAreaIdx = -1;
-
-    const backfireCount = p.activeAreaEffects.filter((_, i) => this.getEffectiveEffectId(p, i) === 'backfire').length;
-    if (backfireCount > 0) {
-      const normalHits = opp.attackQueue.flat();
-      const successfullyDefended = normalHits.length === 0 || normalHits.every(atk => Math.max(0, atk - p.defense) <= 0);
-      if (successfullyDefended) {
-        p.activeAreaEffects.forEach((c, aIdx) => {
-          if (c && this.getEffectiveEffectId(p, aIdx) === 'backfire') p.piercingAttacks[aIdx].push(2);
-        });
-      }
-    }
-
-    let totalDamage = 0;
-    opp.attackQueue.forEach(hits => {
-      hits.forEach(atk => {
-        totalDamage += Math.max(0, atk - p.defense);
-      });
-    });
-    opp.piercingQueue.forEach(hits => {
-      hits.forEach(atk => {
-        totalDamage += atk;
-      });
-    });
-
-    p.hp -= totalDamage;
-
-    if (p.hp <= 0 && hpBeforeDamage >= 4) {
-      const contractIdx = p.activeAreaEffects.findIndex((_, i) => this.getEffectiveEffectId(p, i) === 'contract');
-      if (contractIdx !== -1) {
-        p.hp = 1;
-        p.contractTriggeredAreaIdx = contractIdx;
-      }
-    }
-
-    if (p.hp <= 3 && !p.breakthroughApplied && this.hasEffect(p, 'breakthrough')) {
-      p.magic += p.turnBaseStats.magic.reduce((a, b) => a + b, 0);
-      p.gold += p.turnBaseStats.gold.reduce((a, b) => a + b, 0);
-      p.defense += p.turnBaseStats.defense.reduce((a, b) => a + b, 0);
-      p.turnBaseStats.sums.forEach((s, i) => {
-        if (s > 0) p.currentAttacks[i][0] += s;
-      });
-      p.breakthroughApplied = true;
-    }
-
-    opp.attackQueue = [[], [], []];
-    opp.piercingQueue = [[], [], []];
-    opp.currentAttacks = [[0], [0], [0]];
-    opp.piercingAttacks = [[], [], []];
-
-    if (p.hp <= 0) this.winner = this.opponentIndex();
+    const {defeated} = resolveDamagePhase(this.currentPlayer(), this.opponent());
+    if (defeated) this.winner = this.opponentIndex();
   }
 
   private listOpponentDodgeTargets(): AttackTarget[] {
