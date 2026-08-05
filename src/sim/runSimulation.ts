@@ -1,3 +1,5 @@
+import {pathToFileURL} from 'node:url';
+
 import type {CardAttr} from '../cards';
 // 與 UI 共用同一份規則型別與純計算（見 src/engine/state.ts）
 import {type GameCard, type PlayerState, createPlayer} from '../engine/state';
@@ -194,10 +196,6 @@ function binomialProbAtLeast(successes: number, trials: number, probability: num
 
 // 哪些效果要花魔力，由 engine/activations.ts 的條件表決定（與 UI 同一份）。
 const isMagicSpendEffect = isMagicSpendActivation;
-
-function baseAiAttrValue(attr: CardAttr) {
-  return (AI_ATTR_WEIGHTS[attr.type] || 1) * attr.value;
-}
 
 function aiEffectWeight(effectId: string | null | undefined) {
   if (!effectId) return 0;
@@ -1054,10 +1052,6 @@ class SimulationGame {
     resolveJudging(this.currentPlayer(), this.currentPlayerIndex as 0 | 1, this.diceResults);
   }
 
-  private hasEffect(p: PlayerState, effectId: string) {
-    return p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === effectId);
-  }
-
   // 傷害結算的規則本體在 engine/resolve.ts，與 UI 共用同一份
   private handleDamagePhase() {
     // 先手第一回合不會受到攻擊（對手還沒行動過）
@@ -1467,4 +1461,12 @@ function main() {
   printSeries(stats);
 }
 
-main();
+/*
+ * 只有直接執行這個檔案（npm run sim）時才跑 CLI。
+ * 以前這裡是無條件 main()，任何地方 import 這個模組都會意外跑起一整輪模擬並印一堆
+ * 輸出 —— 之後 AI 要重用模擬器的元件時，第一個踩到的就是這個。
+ */
+const isDirectRun = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+if (isDirectRun) main();
