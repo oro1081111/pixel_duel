@@ -14,6 +14,24 @@ import {
 } from '../engine/deck';
 import {isMagicSpendActivation, listActivations} from '../engine/activations';
 import {resolveDamagePhase, resolveJudging} from '../engine/resolve';
+import {
+  applyAmplify,
+  applyBarrier,
+  applyCharge,
+  applyEvasion,
+  applyFate,
+  applyFlare,
+  applyForest,
+  applyFrost,
+  applyHolyLight,
+  applyIllusion,
+  applyMagicBullet,
+  applyMagicLuck,
+  applyReproduction,
+  applyShield,
+  applySoulSnatch,
+  applyThrust,
+} from '../engine/effects';
 import {getBaseAttrForDie} from '../basebars';
 
 
@@ -1159,10 +1177,7 @@ class SimulationGame {
       shuffleInPlace(indices);
       indices = indices.slice(0, k);
     }
-    indices.forEach(idx => {
-      this.diceResults[idx] = randInt(1, 6);
-    });
-    p.fateUsedIndices.push(areaIdx);
+    applyFate(p, areaIdx, this.diceResults, indices);
     if (this.currentPhaseIndex === 2) this.handleJudging();
   }
 
@@ -1172,20 +1187,12 @@ class SimulationGame {
     const dieIdx = this.currentAiDifficulty() === 'expert'
       ? this.chooseExpertFrostDieIndex()
       : randInt(0, this.diceResults.length - 1);
-    this.diceResults.splice(dieIdx, 1);
-    const extraAtk = randInt(1, 3);
-    p.extraFrostAttacks[areaIdx].push(extraAtk);
-    p.currentAttacks[areaIdx].push(extraAtk);
-    p.frostUsedIndices.push(areaIdx);
+    applyFrost(p, areaIdx, this.diceResults, dieIdx);
   }
 
   private useMagicLuck(areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.magicLuckUsedIndices.includes(areaIdx) || p.magic < 2) return;
-    p.magic -= 2;
-    p.magicSpentInJudging += 2;
-    this.diceResults.push(randInt(1, 6));
-    p.magicLuckUsedIndices.push(areaIdx);
+    if (applyMagicLuck(this.currentPlayer(), areaIdx, this.diceResults) === null) return;
+    // 多了一顆骰子，判定要整個重算（疾風、暗影、光輝都看骰子數）
     this.handleJudging();
   }
 
@@ -1201,10 +1208,7 @@ class SimulationGame {
       : chooseUniform(candidates);
     const targetCard = this.opponent().activeAreaEffects[oppAreaIdx];
     if (!targetCard) return;
-    p.magic -= 1;
-    p.magicSpentInJudging += 1;
-    p.illusionUsedIndices.push(areaIdx);
-    p.illusionCopiedEffectIds[areaIdx] = targetCard.effectId;
+    if (!applyIllusion(p, areaIdx, targetCard)) return;
     this.handleJudging();
   }
 
@@ -1216,63 +1220,31 @@ class SimulationGame {
     const target = this.currentAiDifficulty() === 'expert'
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
-    p.magic -= 3;
-    opp.attackQueue[target.areaIdx].splice(target.hitIdx, 1);
-    p.evasionUsedIndices.push(areaIdx);
+    applyEvasion(p, opp, areaIdx, target.areaIdx, target.hitIdx);
   }
 
   private useShield(_areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.magic < 2) return;
-    p.magic -= 2;
-    p.defense += 1;
+    applyShield(this.currentPlayer());
   }
 
   private useBarrier(areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.barrierUsedIndices.includes(areaIdx) || p.magic < 3) return;
-    p.magic -= 3;
-    p.defense += 3;
-    p.barrierUsedIndices.push(areaIdx);
+    applyBarrier(this.currentPlayer(), areaIdx);
   }
 
   private useAmplify(areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.amplifyUsedIndices.includes(areaIdx) || !this.hasAnyAttackTarget(p)) return;
-    p.currentAttacks = p.currentAttacks.map(hits => hits.map(atk => atk > 0 ? atk + 1 : 0));
-    p.amplifyUsedIndices.push(areaIdx);
+    applyAmplify(this.currentPlayer(), areaIdx);
   }
 
   private useMagicBullet(areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.magic < 1) return;
-    p.magic -= 1;
-    p.currentAttacks[areaIdx].push(2);
+    applyMagicBullet(this.currentPlayer(), areaIdx);
   }
 
   private useThrust(areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.thrustUsedIndices.includes(areaIdx)) return;
-    let transformedCount = 0;
-    p.currentAttacks.forEach((areaAtks, aIdx) => {
-      areaAtks.forEach((val, hitIdx) => {
-        if (val > 0 && val <= 2) {
-          p.currentAttacks[aIdx][hitIdx] = val * 2;
-          transformedCount++;
-        }
-      });
-    });
-    if (transformedCount > 0) p.thrustUsedIndices.push(areaIdx);
+    applyThrust(this.currentPlayer(), areaIdx);
   }
 
   private useForest(areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.forestUsedIndices.includes(areaIdx) || p.magic < 3) return;
-    p.magic -= 3;
-    const totalSum = p.currentAttacks.flat().reduce((a, b) => a + b, 0);
-    p.currentAttacks = [[0], [0], [0]];
-    p.currentAttacks[areaIdx] = [totalSum];
-    p.forestUsedIndices.push(areaIdx);
+    applyForest(this.currentPlayer(), areaIdx);
   }
 
   private useCharge(areaIdx: number) {
@@ -1283,9 +1255,7 @@ class SimulationGame {
     const target = this.currentAiDifficulty() === 'expert'
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
-    p.magic -= 2;
-    p.currentAttacks[target.areaIdx][target.hitIdx] += 3;
-    p.chargeUsedIndices.push(areaIdx);
+    applyCharge(p, areaIdx, target.areaIdx, target.hitIdx);
   }
 
   private useReproduction(areaIdx: number) {
@@ -1296,9 +1266,7 @@ class SimulationGame {
     const target = this.currentAiDifficulty() === 'expert'
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
-    p.magic -= 2;
-    p.currentAttacks[target.areaIdx].push(target.val);
-    p.reproductionUsedIndices.push(areaIdx);
+    applyReproduction(p, areaIdx, target.areaIdx, target.hitIdx);
   }
 
   private useFlare(areaIdx: number) {
@@ -1309,27 +1277,16 @@ class SimulationGame {
     const target = this.currentAiDifficulty() === 'expert'
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
-    p.magic -= 3;
-    p.currentAttacks[target.areaIdx][target.hitIdx] *= 2;
-    p.flareUsedIndices.push(areaIdx);
+    applyFlare(p, areaIdx, target.areaIdx, target.hitIdx);
   }
 
   private useHolyLight(_areaIdx: number) {
-    const p = this.currentPlayer();
-    if (p.magic < 2) return;
-    p.magic -= 2;
-    if (this.currentPhaseIndex === 2) p.magicSpentInJudging += 2;
-    p.hp += 1;
+    applyHolyLight(this.currentPlayer(), this.currentPhaseIndex === 2);
   }
 
   private useSoulSnatch(_areaIdx: number) {
-    const p = this.currentPlayer();
     const opp = this.opponent();
-    if (p.magic < 3) return;
-    p.magic -= 3;
-    if (this.currentPhaseIndex === 2) p.magicSpentInJudging += 3;
-    opp.hp -= 1;
-    p.hp += 1;
+    if (!applySoulSnatch(this.currentPlayer(), opp, this.currentPhaseIndex === 2)) return;
     if (opp.hp <= 0) this.winner = this.currentPlayerIndex;
   }
 

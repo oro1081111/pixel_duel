@@ -16,6 +16,24 @@ import {
 } from './engine/state';
 import {resolveDamagePhase, resolveJudging} from './engine/resolve';
 import {
+    applyAmplify,
+    applyBarrier,
+    applyCharge,
+    applyEvasion,
+    applyFate,
+    applyFlare,
+    applyForest,
+    applyFrost,
+    applyHolyLight,
+    applyIllusion,
+    applyMagicBullet,
+    applyMagicLuck,
+    applyReproduction,
+    applyShield,
+    applySoulSnatch,
+    applyThrust,
+} from './engine/effects';
+import {
     getActivationMagicCost,
     isMagicSpendActivation,
     listActivations,
@@ -2622,14 +2640,7 @@ function targetEvasion(areaIdx, hitIdx) {
 
     // Regular attacks only
     if (opp.attackQueue[areaIdx] && opp.attackQueue[areaIdx][hitIdx] !== undefined) {
-        if (p.magic >= 3) {
-            p.magic -= 3;
-            opp.attackQueue[areaIdx].splice(hitIdx, 1);
-            
-            if (S.evasionSourceAreaIdx !== -1) {
-                p.evasionUsedIndices.push(S.evasionSourceAreaIdx);
-            }
-            
+        if (applyEvasion(p, opp, S.evasionSourceAreaIdx, areaIdx, hitIdx)) {
             S.evasionSelectionMode = false;
             S.evasionSourceAreaIdx = -1;
             addLog('閃避成功！消耗 3 點魔力已無視該次攻擊');
@@ -2655,9 +2666,7 @@ function useShield(areaIdx) {
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'shield') {
-        if (p.magic >= 2) {
-            p.magic -= 2;
-            p.defense += 1;
+        if (applyShield(p)) {
             addLog(`${p.name} 使用了「護盾」，消耗 2 點魔力增加 1 點防禦`);
             render();
         } else {
@@ -2680,14 +2689,11 @@ function useMagicLuck(areaIdx) {
             showToast('這張魔運卡本回合已使用過');
             return;
         }
-        if (p.magic >= 2) {
-            p.magic -= 2;
-            p.magicSpentInJudging += 2;
-            const newVal = Math.floor(Math.random() * 6) + 1;
-            S.diceResults.push(newVal);
-            p.magicLuckUsedIndices.push(areaIdx);
+        const newVal = applyMagicLuck(p, areaIdx, S.diceResults);
+        if (newVal !== null) {
             addLog(`${p.name} 使用了「魔運」，消耗 2 點魔力額外投擲一顆骰子：${newVal}`);
-            handleJudging(); // Re-calculate Gale, Shadow, Brilliance, etc.
+            // 多了一顆骰子，判定要整個重算（疾風、暗影、光輝都看骰子數）
+            handleJudging();
             render();
         } else {
             showToast('魔力不足 (需要 2 點)');
@@ -2743,11 +2749,11 @@ function targetIllusion(oppAreaIdx) {
         return;
     }
 
-    p.magic -= 1;
-    p.magicSpentInJudging += 1;
-    p.illusionUsedIndices.push(S.illusionSourceAreaIdx);
-    p.illusionCopiedEffectIds[S.illusionSourceAreaIdx] = targetCard.effectId;
-    
+    if (!applyIllusion(p, S.illusionSourceAreaIdx, targetCard)) {
+        showToast('魔力不足 (需要 1 點)');
+        return;
+    }
+
     addLog(`${p.name} 使用「幻象幽影」複製了對手的「${targetCard.effectName}」！`);
     
     S.illusionSelectionMode = false;
@@ -2773,11 +2779,7 @@ function useAmplify(areaIdx) {
             render();
             return;
         }
-        // Amplify is now free
-        p.currentAttacks = p.currentAttacks.map(hits => 
-            hits.map(atk => atk > 0 ? atk + 1 : 0)
-        );
-        p.amplifyUsedIndices.push(areaIdx);
+        applyAmplify(p, areaIdx);
         render();
     }
 }
@@ -2869,14 +2871,8 @@ function targetFlare(targetAreaIdx, atkIdx) {
     }
 
     const atkVal = p.currentAttacks[targetAreaIdx][atkIdx];
-    if (atkVal > 0) {
-        const newVal = atkVal * 2;
-        p.currentAttacks[targetAreaIdx][atkIdx] = newVal;
-        p.magic -= 3;
-        if (S.flareSourceAreaIdx !== -1) {
-            p.flareUsedIndices.push(S.flareSourceAreaIdx);
-        }
-        
+    const newVal = applyFlare(p, S.flareSourceAreaIdx, targetAreaIdx, atkIdx);
+    if (newVal !== null) {
         addLog(`${p.name} 使用了「閃光」，使強度從 ${atkVal} 翻倍為 ${newVal}`);
         S.flareSelectionMode = false;
         S.flareSourceAreaIdx = -1;
@@ -2897,18 +2893,8 @@ function useThrust(areaIdx) {
             return;
         }
 
-        let transformedCount = 0;
-        p.currentAttacks.forEach((areaAtks, aIdx) => {
-            areaAtks.forEach((val, hitIdx) => {
-                if (val > 0 && val <= 2) {
-                    p.currentAttacks[aIdx][hitIdx] = val * 2;
-                    transformedCount++;
-                }
-            });
-        });
-
+        const transformedCount = applyThrust(p, areaIdx);
         if (transformedCount > 0) {
-            p.thrustUsedIndices.push(areaIdx);
             addLog(`${p.name} 使用了「突刺」，將 ${transformedCount} 個強度為 1 或 2 的攻擊翻倍`);
             render();
         } else {
@@ -2941,19 +2927,7 @@ function useForest(areaIdx) {
             showToast('這張森林卡本回合已使用過');
             return;
         }
-        if (p.magic >= 3) {
-            p.magic -= 3;
-            // Global Merge: Sum all normal attacks from all areas
-            let totalSum = 0;
-            p.currentAttacks.forEach(hits => {
-                totalSum += hits.reduce((a, b) => a + b, 0);
-            });
-
-            // Set all areas to 0 hits, then put total into the target area
-            p.currentAttacks = [[0], [0], [0]];
-            p.currentAttacks[areaIdx] = [totalSum];
-
-            p.forestUsedIndices.push(areaIdx);
+        if (applyForest(p, areaIdx)) {
             addLog(`${p.name} 使用了「森林」，消耗 3 點魔力將全場攻擊合併至區域 ${areaIdx + 1}`);
             render();
         } else {
@@ -2994,21 +2968,11 @@ function targetFrost(dieIdx) {
     if (!S.frostSelectionMode) return;
     const p = getCurrentPlayer();
     
-    // Remove the die
-    const removedVal = S.diceResults.splice(dieIdx, 1)[0];
-    
-    // Generate random extra attack 1-3
-    const extraAtk = Math.floor(Math.random() * 3) + 1;
-    
-    if (!p.extraFrostAttacks) p.extraFrostAttacks = [[], [], []];
-    p.extraFrostAttacks[S.frostSourceAreaIdx].push(extraAtk);
-    
-    // Immediately show in UI (currentPhaseIndex 1)
-    p.currentAttacks[S.frostSourceAreaIdx].push(extraAtk);
-    
-    p.frostUsedIndices.push(S.frostSourceAreaIdx);
-    
-    addLog(`${p.name} 使用了「冰霜」，捨棄了骰子 ${removedVal}，並在區域 ${S.frostSourceAreaIdx + 1} 獲得了強度為 ${extraAtk} 的額外攻擊`);
+    const sourceAreaIdx = S.frostSourceAreaIdx;
+    const result = applyFrost(p, sourceAreaIdx, S.diceResults, dieIdx);
+    if (!result) return;
+
+    addLog(`${p.name} 使用了「冰霜」，捨棄了骰子 ${result.removedVal}，並在區域 ${sourceAreaIdx + 1} 獲得了強度為 ${result.extraAtk} 的額外攻擊`);
     
     S.frostSelectionMode = false;
     S.frostSourceAreaIdx = -1;
@@ -3026,10 +2990,7 @@ function useHolyLight(areaIdx) {
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'holy_light') {
-        if (p.magic >= 2) {
-            p.magic -= 2;
-            if (S.currentPhaseIndex === 2) p.magicSpentInJudging += 2;
-            p.hp += 1;
+        if (applyHolyLight(p, S.currentPhaseIndex === 2)) {
             addLog(`${p.name} 使用了「聖光」，消耗 2 點魔力回復 1 點生命`);
             render();
         } else {
@@ -3050,11 +3011,7 @@ function useSoulSnatch(areaIdx) {
     const card = p.activeAreaEffects[areaIdx];
 
     if (card && getEffectiveEffectId(p, areaIdx) === 'soul_snatch') {
-        if (p.magic >= 3) {
-            p.magic -= 3;
-            if (S.currentPhaseIndex === 2) p.magicSpentInJudging += 3;
-            opp.hp -= 1;
-            p.hp += 1;
+        if (applySoulSnatch(p, opp, S.currentPhaseIndex === 2)) {
             addLog(`${p.name} 使用了「奪魂」，消耗 3 點魔力吸收對手 1 點生命值`);
             
             if (opp.hp <= 0) {
@@ -3153,13 +3110,7 @@ function targetReproduction(targetAreaIdx, atkIdx) {
     }
     
     const atkVal = p.currentAttacks[targetAreaIdx][atkIdx];
-    if (atkVal > 0) {
-        p.currentAttacks[targetAreaIdx].push(atkVal);
-        p.magic -= 2;
-        if (S.reproductionSourceAreaIdx !== -1) {
-            p.reproductionUsedIndices.push(S.reproductionSourceAreaIdx);
-        }
-        
+    if (applyReproduction(p, S.reproductionSourceAreaIdx, targetAreaIdx, atkIdx)) {
         addLog(`${p.name} 使用了「再現」，使強度為 ${atkVal} 的攻擊變為兩次`);
         S.reproductionSelectionMode = false;
         S.reproductionSourceAreaIdx = -1;
@@ -3212,12 +3163,7 @@ function confirmFate() {
         return;
     }
 
-    S.fateSelectedDiceIndices.forEach(idx => {
-        S.diceResults[idx] = Math.floor(Math.random() * 6) + 1;
-    });
-    if (S.fateSourceAreaIdx !== -1) {
-        p.fateUsedIndices.push(S.fateSourceAreaIdx);
-    }
+    applyFate(p, S.fateSourceAreaIdx, S.diceResults, S.fateSelectedDiceIndices);
     S.fateSelectionMode = false;
     S.fateSourceAreaIdx = -1;
     S.fateSelectedDiceIndices = [];
@@ -3468,10 +3414,7 @@ function useBarrier(areaIdx) {
             showToast('這張屏障卡本回合已使用過');
             return;
         }
-        if (p.magic >= 3) {
-            p.magic -= 3;
-            p.defense += 3;
-            p.barrierUsedIndices.push(areaIdx);
+        if (applyBarrier(p, areaIdx)) {
             addLog(`${p.name} 使用了「屏障」，消耗 3 點魔力增加 3 點防禦`);
             render();
         } else {
@@ -3491,12 +3434,7 @@ function useCharge(areaIdx, hitIdx = -1) {
     if (S.chargeSelectionMode) {
         // Step 2: Selecting specific target hit
         if (hitIdx !== -1 && p.currentAttacks[areaIdx][hitIdx] > 0) {
-            if (p.magic >= 2) {
-                p.magic -= 2;
-                p.currentAttacks[areaIdx][hitIdx] += 3;
-                if (S.chargeSourceAreaIdx !== -1) {
-                    p.chargeUsedIndices.push(S.chargeSourceAreaIdx);
-                }
+            if (applyCharge(p, S.chargeSourceAreaIdx, areaIdx, hitIdx)) {
                 S.chargeSelectionMode = false;
                 S.chargeSourceAreaIdx = -1;
                 render();
@@ -3542,10 +3480,7 @@ function useMagicBullet(areaIdx) {
     // Directly use the card in the clicked area to add an attack hit
     const card = p.activeAreaEffects[areaIdx];
     if (card && getEffectiveEffectId(p, areaIdx) === 'magic_bullet') {
-        if (p.magic >= 1) {
-            p.magic -= 1;
-            // PUSH A NEW ATTACK INSTANCE to the same area
-            p.currentAttacks[areaIdx].push(2);
+        if (applyMagicBullet(p, areaIdx)) {
             render();
         } else {
             showToast('魔力不足 (需要 1 點)');
