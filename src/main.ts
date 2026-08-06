@@ -15,9 +15,6 @@ import {
     damageThroughDefense,
 } from './engine/state';
 import {resolveDamagePhase, resolveJudging} from './engine/resolve';
-// 「專家」電腦用的模擬決策引擎（見 src/sim/bandit.ts）
-import {SimulationGame} from './sim/game';
-import {banditChooseActivation, banditChoosePlayPlan} from './sim/bandit';
 import {
     applyAmplify,
     applyBarrier,
@@ -816,6 +813,7 @@ function startPvpGame() {
 }
 
 function startCvpGame() {
+    warmUpAiEngine();
     selectedMode = 'cvp';
     appScreen = 'game';
     setMatchPlayerNamesForMode('cvp');
@@ -824,6 +822,7 @@ function startCvpGame() {
 }
 
 function startPvcGame() {
+    warmUpAiEngine();
     selectedMode = 'pvc';
     appScreen = 'game';
     setMatchPlayerNamesForMode('pvc');
@@ -963,6 +962,8 @@ function renderHomeScreen() {
         const btn = wrap.querySelector(`#aiLevel-${level}`) as HTMLButtonElement | null;
         if (btn) btn.onclick = () => {
             aiLevel = level;
+            // 選了專家就先把引擎抓下來，跟玩家挑模式的時間重疊
+            warmUpAiEngine();
             render();
         };
     });
@@ -1308,11 +1309,52 @@ let aiLevel: AiLevel = 'expert';
 const AI_LEVEL_LABEL: Record<AiLevel, string> = {adept: '高手', expert: '專家'};
 
 /*
+ * 「專家」的模擬決策引擎是動態載入的（約 40KB）。
+ *
+ * 只有選了專家並開始人機對戰才用得到 —— PvP、只看規則、選高手的人
+ * 都不該為它付首次載入的成本。而且幾乎不會有等待感：CvP / PvC 的準備階段
+ * 都是玩家先出牌，等玩家操作那幾秒早就載完了。
+ */
+type AiEngine = {
+    SimulationGame: typeof import('./sim/game').SimulationGame;
+    banditChoosePlayPlan: typeof import('./sim/bandit').banditChoosePlayPlan;
+    banditChooseActivation: typeof import('./sim/bandit').banditChooseActivation;
+};
+
+let aiEnginePromise: Promise<AiEngine | null> | null = null;
+
+function loadAiEngine(): Promise<AiEngine | null> {
+    if (!aiEnginePromise) {
+        aiEnginePromise = Promise.all([import('./sim/game'), import('./sim/bandit')])
+            .then(([game, bandit]) => ({
+                SimulationGame: game.SimulationGame,
+                banditChoosePlayPlan: bandit.banditChoosePlayPlan,
+                banditChooseActivation: bandit.banditChooseActivation,
+            }))
+            .catch(() => {
+                /*
+                 * 載不到（離線、chunk 遺失）就回 null，讓電腦退回高手繼續打 ——
+                 * 對局中途卡死比少一點棋力嚴重得多。
+                 * 不快取失敗，下一個決策點會再試一次。
+                 */
+                aiEnginePromise = null;
+                return null;
+            });
+    }
+    return aiEnginePromise;
+}
+
+/** 提前開始載入，讓下載跟玩家的操作時間重疊。失敗不影響任何事。 */
+function warmUpAiEngine() {
+    if (aiLevel === 'expert') void loadAiEngine();
+}
+
+/*
  * 把當前局面複製進無頭引擎，給「專家」當思考沙盤。
  * 深拷貝，所以它在裡面怎麼試打都不會動到真實對局。
  */
-function makeAiSandbox(): SimulationGame {
-    return SimulationGame.forThinking({
+function makeAiSandbox(engine: AiEngine) {
+    return engine.SimulationGame.forThinking({
         deck: S.deck,
         market: S.market,
         players: S.players,
@@ -2219,8 +2261,9 @@ async function aiActivationLoopStep() {
      * 專家：把「發動這個效果」與「不發動」各模擬幾十次到回合結束再挑。
      * 每次只決定下一個原子行動，做完重新搜 —— 發動幾次、什麼順序會自然浮現。
      */
-    if (aiLevel === 'expert') {
-        const choice = banditChooseActivation(makeAiSandbox(), S.currentPhaseIndex);
+    const engine = aiLevel === 'expert' ? await loadAiEngine() : null;
+    if (engine) {
+        const choice = engine.banditChooseActivation(makeAiSandbox(engine), S.currentPhaseIndex);
         if (choice === 'STOP') {
             await sleep(randInt(140, 260));
             return false;
@@ -2270,8 +2313,9 @@ async function aiDoPlayPhase() {
      * 專家：把「打幾張、哪幾張、放哪一區」當成完整方案來比較，各模擬數十次。
      * 準備階段只能出 1 張，方案取第一步就好。
      */
-    if (aiLevel === 'expert') {
-        const plan = banditChoosePlayPlan(makeAiSandbox()) ?? [];
+    const engine = aiLevel === 'expert' ? await loadAiEngine() : null;
+    if (engine) {
+        const plan = engine.banditChoosePlayPlan(makeAiSandbox(engine)) ?? [];
         const steps = S.inPreparationPhase ? plan.slice(0, 1) : plan;
         logAi(`${getAiName()} 出牌：規劃打出 ${steps.length} 張`);
         await sleep(randInt(250, 450));
