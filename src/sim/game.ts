@@ -333,11 +333,6 @@ export class SimulationGame {
     return this.availableActivations();
   }
 
-  // bandit 用來預篩出牌候選的靜態評分；就是 expert 原本那套
-  scoreCardForBandit(card: GameCard, areaIdx = -1) {
-    return this.scoreCardForExpert(card, areaIdx);
-  }
-
   run(): {winner: Winner; turns: number} {
     if (this.openingMode === 'prep') this.preparationPhase();
     if (this.openingMode === 'staged') this.stagedOpeningPhase();

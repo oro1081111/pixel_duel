@@ -8,7 +8,19 @@ import {
   type OpeningMode,
   SimulationGame,
 } from './game';
-import {DEFAULT_BANDIT_CONFIG} from './bandit';
+import {type BanditConfig, DEFAULT_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
+
+// 給 --ladder / --b-ladder 用的階梯預設值，方便兩種形狀直接對打
+const LADDER_PRESETS: Record<string, BanditConfig> = {
+  merged: DEFAULT_BANDIT_CONFIG,
+  legacy: LEGACY_BANDIT_CONFIG,
+};
+
+function pickLadder(name: string): BanditConfig {
+  const preset = LADDER_PRESETS[name];
+  if (!preset) throw new Error(`--ladder must be one of: ${Object.keys(LADDER_PRESETS).join(', ')}`);
+  return {...preset, playLadder: preset.playLadder.map(x => ({...x}))};
+}
 
 type MatchupMode = 'custom' | 'expert-mirror' | 'expert-normal' | 'bandit-expert' | 'bandit-tune';
 
@@ -62,35 +74,17 @@ function parseArgs() {
       if (!isAiDifficulty(next)) throw new Error('--p1-ai must be "normal", "expert" or "bandit"');
       opts.p1Ai = next;
       i++;
-    } else if (arg === '--play-budget' && next) {
-      opts.banditConfig.playBudget = Number(next);
+    } else if (arg === '--ladder' && next) {
+      opts.banditConfig = pickLadder(next);
+      i++;
+    } else if (arg === '--b-ladder' && next) {
+      opts.banditConfigB = pickLadder(next);
       i++;
     } else if (arg === '--effect-budget' && next) {
       opts.banditConfig.effectBudget = Number(next);
       i++;
-    } else if (arg === '--max-prefilter-arms' && next) {
-      opts.banditConfig.maxPrefilterArms = Number(next);
-      i++;
-    } else if (arg === '--b-play-budget' && next) {
-      opts.banditConfigB.playBudget = Number(next);
-      i++;
     } else if (arg === '--b-effect-budget' && next) {
       opts.banditConfigB.effectBudget = Number(next);
-      i++;
-    } else if (arg === '--b-max-prefilter-arms' && next) {
-      opts.banditConfigB.maxPrefilterArms = Number(next);
-      i++;
-    } else if (arg === '--b-play-cap' && next) {
-      opts.banditConfigB.playCandidateCap = Number(next);
-      i++;
-    } else if (arg === '--prefilter' && next) {
-      if (next !== 'heuristic' && next !== 'rollout') {
-        throw new Error('--prefilter must be "heuristic" or "rollout"');
-      }
-      opts.banditConfig.playPrefilter = next;
-      i++;
-    } else if (arg === '--play-cap' && next) {
-      opts.banditConfig.playCandidateCap = Number(next);
       i++;
     } else if (arg === '--matchup' && next) {
       if (next !== 'custom' && next !== 'expert-mirror' && next !== 'expert-normal'
@@ -236,8 +230,15 @@ function main() {
    * 拿兩邊各自去打 expert 是量不出差距的 —— 都已經七成多，逼近天花板。
    */
   if (opts.matchup === 'bandit-tune') {
-    const fmt = (c: typeof opts.banditConfig) =>
-      `出牌 ${c.playBudget} / 效果 ${c.effectBudget} / 候選 ${c.playCandidateCap} / 預篩上限 ${c.maxPrefilterArms}`;
+    const fmt = (c: BanditConfig) => {
+      const cost = c.playLadder.reduce((sum, st, idx) => {
+        const alive = idx === 0 ? c.playPool : c.playLadder[idx - 1].keep;
+        return sum + alive * st.samples;
+      }, 0);
+      const champ = c.playLadder.reduce((sum, st) => sum + st.samples, 0);
+      const shape = [c.playPool, ...c.playLadder.map(st => st.keep)].join('>');
+      return `${shape}｜每階模擬 ${c.playLadder.map(st => st.samples).join(',')}｜成本 ${cost}、冠軍樣本 ${champ}`;
+    };
     console.log(`A: ${fmt(opts.banditConfig)}`);
     console.log(`B: ${fmt(opts.banditConfigB)}`);
     console.log('');
