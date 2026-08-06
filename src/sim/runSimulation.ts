@@ -110,6 +110,15 @@ function parseArgs() {
     } else if (arg === '--effect-budget' && next) {
       opts.banditConfig.effectBudget = Number(next);
       i++;
+    } else if (arg === '--max-prefilter-arms' && next) {
+      opts.banditConfig.maxPrefilterArms = Number(next);
+      i++;
+    } else if (arg === '--prefilter' && next) {
+      if (next !== 'heuristic' && next !== 'rollout') {
+        throw new Error('--prefilter must be "heuristic" or "rollout"');
+      }
+      opts.banditConfig.playPrefilter = next;
+      i++;
     } else if (arg === '--play-cap' && next) {
       opts.banditConfig.playCandidateCap = Number(next);
       i++;

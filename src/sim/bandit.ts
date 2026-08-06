@@ -1,6 +1,7 @@
 import type {GameCard} from '../engine/state';
 import type {SimulationGame} from './runSimulation';
-import {makeRng, withRng} from './rng';
+import {shuffled} from '../engine/deck';
+import {makeRng, rng, withRng} from './rng';
 
 /*
  * 單回合 Bandit AI。
@@ -30,9 +31,6 @@ import {makeRng, withRng} from './rng';
  * 2+2+2 造成 0 傷害、單一個 6 造成 4 傷害 —— 只比較攻擊總和會完全看不出差別。
  */
 const DEFENSE_PRIOR = [0.30, 0.28, 0.20, 0.12, 0.07, 0.03];
-
-// 每個出牌張數在候選池裡的保底名額
-const MIN_PLANS_PER_PLAY_COUNT = 2;
 
 export type TurnOutcome = {
     /** 對手在我這回合內就被打死（奪魂之類的直接傷害） */
@@ -99,15 +97,24 @@ function record(stats: ArmStats, o: TurnOutcome) {
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 
+/*
+ * 樣本數 < 2 時回傳 0，不是 Infinity。
+ *
+ * 單一樣本估不出變異數，直覺上該說「沒有資訊、視為平手」——
+ * 但預篩第一輪每個候選就只有一個樣本，全判平手的話淘汰會退化成
+ * 照枚舉順序砍，完全不看模擬結果。
+ * 而且有 Common Random Numbers，同一輪所有候選看到同一組骰子，
+ * 這一個樣本是配對比較，直接比原始數值是有意義的。
+ */
 function stderr(xs: number[]) {
-    if (xs.length < 2) return Infinity;
+    if (xs.length < 2) return 0;
     const m = mean(xs);
     const variance = xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1);
     return Math.sqrt(variance / xs.length);
 }
 
 function proportionStderr(k: number, n: number) {
-    if (n < 2) return Infinity;
+    if (n < 2) return 0;
     const p = k / n;
     return Math.sqrt((p * (1 - p)) / n);
 }
@@ -164,14 +171,32 @@ export type BanditConfig = {
     playBudget: number;
     /** 效果階段每次決策的 rollout 總預算 */
     effectBudget: number;
-    /** 出牌候選先用靜態啟發式預篩到幾個，再進 SH */
+    /** 出牌候選先預篩到幾個，再進 SH */
     playCandidateCap: number;
+    /**
+     * 預篩方式。
+     * 'heuristic'：用 expert 的卡牌評分挑，便宜但天花板受限於 expert 的品味。
+     * 'rollout'：每輪每個候選各跑一次模擬、砍掉一半，直到剩下 cap 個。
+     *            整條決策鏈上不再有手調權重，代價是多花不少 rollout。
+     */
+    playPrefilter: 'heuristic' | 'rollout';
+    /**
+     * rollout 預篩開始前，候選數的上限；超過就先隨機抽樣。
+     *
+     * 預篩成本正比於候選數，而候選數隨手牌張數暴增（9 張手牌有 4743 個方案）。
+     * 不設上限的話 p99 延遲會到 1 秒以上 —— 中位數很漂亮但偶爾凍結一下，
+     * 玩家感覺到的是後者。隨機抽樣會丟掉候選，但不引入任何偏好，
+     * 而且方案之間高度重複，抽樣損失比表面上小。
+     */
+    maxPrefilterArms: number;
 };
 
 export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
     playBudget: 300,
     effectBudget: 100,
     playCandidateCap: 16,
+    playPrefilter: 'rollout',
+    maxPrefilterArms: 96,
 };
 
 /*
@@ -207,6 +232,45 @@ function successiveHalving<T>(
         alive = alive.slice(0, Math.max(1, Math.floor(alive.length / 2)));
     }
     return alive[0].arm;
+}
+
+/*
+ * 用模擬本身做預篩，取代靜態評分。
+ *
+ * 每一輪所有存活候選各跑「一次」rollout，排序後砍掉一半，直到剩下 cap 個。
+ * 樣本會跨輪累積：撐到第 4 輪的候選已經有 4 個樣本，判斷越後面越可靠，
+ * 而總成本大約是 2N 次 rollout（N + N/2 + N/4 + ... 的幾何級數）。
+ *
+ * 和 successiveHalving 的差別只在「每輪固定跑一次」而不是按預算分配 ——
+ * 這裡的目的是快速砍掉大量明顯不好的候選，不是精確挑出第一名。
+ */
+function prefilterByRollout<T>(
+    arms: T[],
+    rollout: (arm: T, seed: number) => TurnOutcome,
+    cap: number,
+    seedBase: number,
+    maxArms: number,
+): T[] {
+    if (arms.length <= cap) return arms;
+
+    let pool = arms;
+    if (pool.length > maxArms) {
+        // 隨機抽樣壓到上限，讓成本有上界（見 maxPrefilterArms 的說明）
+        pool = shuffled(pool, rng).slice(0, maxArms);
+    }
+
+    let alive = pool.map(arm => ({arm, stats: newStats()}));
+    let round = 0;
+    while (alive.length > cap) {
+        // 同一輪所有候選餵同一個 seed：比的是決策差異，不是誰運氣好
+        const seed = seedBase + round;
+        for (const entry of alive) record(entry.stats, rollout(entry.arm, seed));
+        alive.sort((x, y) => compareArms(y.stats, x.stats));
+        // 砍一半，但不要衝過頭砍到 cap 以下 —— 20 個時留 16 比留 10 好
+        alive = alive.slice(0, Math.max(cap, Math.ceil(alive.length / 2)));
+        round++;
+    }
+    return alive.map(e => e.arm);
 }
 
 // ---------------------------------------------------------------- 出牌階段
@@ -259,6 +323,50 @@ export function enumeratePlayPlans(hand: GameCard[]): PlayStep[][] {
     return plans;
 }
 
+/*
+ * 舊的預篩：用 expert 的卡牌評分挑。留著是為了能和 rollout 預篩對照 ——
+ * 「拿掉手調權重之後強度是升是降」是可測的，不該用猜的。
+ *
+ * 名額要按出牌張數分開保底：靜態分數是每張牌相加，出 3 張的總分幾乎必然大於
+ * 出 1 張，直接取總分前 N 名的話候選池會被 3 張方案佔滿，
+ * 而「少出一張換多一顆骰子」有時才是對的（例如場上有光輝之箭時）。
+ */
+const MIN_PLANS_PER_PLAY_COUNT = 2;
+
+function prefilterByHeuristic(
+    game: SimulationGame,
+    hand: GameCard[],
+    plans: PlayStep[][],
+    cap: number,
+): PlayStep[][] {
+    const byCount = new Map<number, Array<{plan: PlayStep[]; score: number}>>();
+    for (const plan of plans) {
+        const score = plan.reduce((sum, step) => {
+            const card = hand.find(c => c.id === step.cardId);
+            return sum + (card ? game.scoreCardForBandit(card, step.areaIdx) : 0);
+        }, 0);
+        const bucket = byCount.get(plan.length) ?? [];
+        bucket.push({plan, score});
+        byCount.set(plan.length, bucket);
+    }
+    const buckets = [...byCount.keys()].sort((a, b) => a - b);
+    for (const bucket of byCount.values()) bucket.sort((a, b) => b.score - a.score);
+
+    const picked = new Set<PlayStep[]>();
+    for (const k of buckets) {
+        for (const x of byCount.get(k)!.slice(0, MIN_PLANS_PER_PLAY_COUNT)) picked.add(x.plan);
+    }
+    const rest = buckets
+        .flatMap(k => byCount.get(k)!)
+        .filter(x => !picked.has(x.plan))
+        .sort((a, b) => b.score - a.score);
+    for (const x of rest) {
+        if (picked.size >= cap) break;
+        picked.add(x.plan);
+    }
+    return [...picked];
+}
+
 function applyPlan(game: SimulationGame, plan: PlayStep[]) {
     for (const step of plan) {
         const handIdx = game.players[game.currentPlayerIndex].hand.findIndex(c => c.id === step.cardId);
@@ -275,68 +383,29 @@ export function banditChoosePlayPlan(
     const hand = game.players[myIdx].hand;
     if (hand.length === 0) return null;
 
-    let plans = enumeratePlayPlans(hand);
+    const allPlans = enumeratePlayPlans(hand);
+    const seedBase = Math.floor(Math.random() * 1e9);
+
+    const runRollout = (plan: PlayStep[], seed: number) => withRng(makeRng(seed), () => {
+        const clone = game.cloneForRollout();
+        applyPlan(clone, plan);
+        clone.currentPhaseIndex = 1;
+        clone.finishTurnForRollout();
+        return evaluateTurnOutcome(clone, myIdx);
+    });
 
     /*
-     * 候選數會到好幾百，全部丟進 SH 的話第一輪每個只分得到不到一次 rollout，
-     * 淘汰就純粹是雜訊。先用現有 expert 的靜態評分預篩 —— 它當提案分布夠用，
-     * bandit 真正要決定的是「打幾張、放哪一區」，那部分完全交給模擬。
-     *
-     * 代價是天花板被限制在「expert 前 N 名之內」。若之後發現這裡漏掉好棋，
-     * 再換成 beam search（先評估單張前綴、保留前幾名再展開）。
+     * 候選數會到好幾百（手牌 5~6 張時 645~1218 個），全部丟進 SH 的話
+     * 第一輪每個分不到一次 rollout，淘汰就純粹是雜訊。所以要先預篩。
      */
+    let plans = allPlans;
     if (plans.length > cfg.playCandidateCap) {
-        /*
-         * 名額要按「出幾張」分開配。
-         * 靜態分數是每張牌相加，出 3 張的總分幾乎必然大於出 1 張，
-         * 直接取總分前 N 名的話候選池會被 3 張方案佔滿，
-         * 而「少出一張換多一顆骰子」有時才是對的（例如場上有光輝之箭時）。
-         * 每個出牌張數各保障一份名額，讓 bandit 真的有機會比較這件事。
-         */
-        const byCount = new Map<number, Array<{plan: PlayStep[]; score: number}>>();
-        for (const plan of plans) {
-            const score = plan.reduce((sum, step) => {
-                const card = hand.find(c => c.id === step.cardId);
-                return sum + (card ? game.scoreCardForBandit(card, step.areaIdx) : 0);
-            }, 0);
-            const bucket = byCount.get(plan.length) ?? [];
-            bucket.push({plan, score});
-            byCount.set(plan.length, bucket);
-        }
-        const buckets = [...byCount.keys()].sort((a, b) => a - b);
-        for (const bucket of byCount.values()) bucket.sort((a, b) => b.score - a.score);
-
-        // 每個張數保底 2 個名額，其餘照總分填滿。
-        // 均分名額會反過來餓死主流張數的多樣性；保底只是確保「少出一張」這個選項
-        // 一定會被實際模擬過，而不是被總分掃出候選池。
-        const picked = new Set<PlayStep[]>();
-        for (const k of buckets) {
-            for (const x of byCount.get(k)!.slice(0, MIN_PLANS_PER_PLAY_COUNT)) picked.add(x.plan);
-        }
-        const rest = buckets
-            .flatMap(k => byCount.get(k)!)
-            .filter(x => !picked.has(x.plan))
-            .sort((a, b) => b.score - a.score);
-        for (const x of rest) {
-            if (picked.size >= cfg.playCandidateCap) break;
-            picked.add(x.plan);
-        }
-        plans = [...picked];
+        plans = cfg.playPrefilter === 'rollout'
+            ? prefilterByRollout(plans, runRollout, cfg.playCandidateCap, seedBase, cfg.maxPrefilterArms)
+            : prefilterByHeuristic(game, hand, plans, cfg.playCandidateCap);
     }
 
-    const seedBase = Math.floor(Math.random() * 1e9);
-    return successiveHalving(
-        plans,
-        (plan, seed) => withRng(makeRng(seed), () => {
-            const clone = game.cloneForRollout();
-            applyPlan(clone, plan);
-            clone.currentPhaseIndex = 1;
-            clone.finishTurnForRollout();
-            return evaluateTurnOutcome(clone, myIdx);
-        }),
-        cfg.playBudget,
-        seedBase,
-    );
+    return successiveHalving(plans, runRollout, cfg.playBudget, seedBase + 1_000_000);
 }
 
 // ---------------------------------------------------------------- 效果階段
