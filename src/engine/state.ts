@@ -102,6 +102,94 @@ export function createPlayer(name: string, hp = 12): PlayerState {
 }
 
 /*
+ * 一整場對局的規則狀態。
+ *
+ * 這裡只放「規則需要知道的東西」；純畫面狀態（抽屜開合、捲動位置、彈窗）留在 UI 端。
+ * 分界的判準很簡單：模擬器複製一份狀態往下跑時會用到的，就屬於這裡。
+ *
+ * 選取模式（chargeSelectionMode 等）看似是 UI，實際上是規則的一部分：它表示
+ * 「某張卡的效果已啟動，正在等待選擇目標」，是回合流程中的一個真實中間狀態，
+ * 模擬器要重播玩家決策時同樣得經過它。
+ */
+export type GameState = {
+    deck: GameCard[];
+    market: Array<GameCard | null>;   // [price3, price2, price1]
+    buyDeckDrawCount: number;         // 購買階段：已從牌庫抽了幾張
+    players: [PlayerState, PlayerState];
+
+    currentPlayerIndex: number;
+    currentPhaseIndex: number;
+    diceResults: number[];
+    selectedHandCardIndex: number;
+    firstPlayerFirstTurn: boolean;
+    winner: string | null;
+    gameLog: string[];
+    phaseHint: string;
+    // 回合開始時手牌為 0：視為跳過出牌階段，擲骰階段固定投 5 顆
+    skippedPlayBecauseNoHand: boolean;
+    // 一次性準備階段：後手先打出 1 張到自己場地，才進入正式流程
+    inPreparationPhase: boolean;
+
+    chargeSelectionMode: boolean;
+    chargeSourceAreaIdx: number;
+    fateSelectionMode: boolean;
+    fateSourceAreaIdx: number;
+    fateSelectedDiceIndices: number[];
+    evasionSelectionMode: boolean;
+    evasionSourceAreaIdx: number;
+    reproductionSelectionMode: boolean;
+    reproductionSourceAreaIdx: number;
+    flareSelectionMode: boolean;
+    flareSourceAreaIdx: number;
+    luckySelectionMode: boolean;
+    luckySourceAreaIdx: number;
+    illusionSelectionMode: boolean;
+    illusionSourceAreaIdx: number;
+    frostSelectionMode: boolean;
+    frostSourceAreaIdx: number;
+};
+
+export function createGameState(
+    playerNames: [string, string] = ['玩家 A', '玩家 B'],
+): GameState {
+    return {
+        deck: [],
+        market: [null, null, null],
+        buyDeckDrawCount: 0,
+        players: [createPlayer(playerNames[0]), createPlayer(playerNames[1])],
+
+        currentPlayerIndex: 0,
+        currentPhaseIndex: 0,
+        diceResults: [],
+        selectedHandCardIndex: -1,
+        firstPlayerFirstTurn: true,
+        winner: null,
+        gameLog: ['遊戲開始！'],
+        phaseHint: '選牌出牌',
+        skippedPlayBecauseNoHand: false,
+        inPreparationPhase: true,
+
+        chargeSelectionMode: false,
+        chargeSourceAreaIdx: -1,
+        fateSelectionMode: false,
+        fateSourceAreaIdx: -1,
+        fateSelectedDiceIndices: [],
+        evasionSelectionMode: false,
+        evasionSourceAreaIdx: -1,
+        reproductionSelectionMode: false,
+        reproductionSourceAreaIdx: -1,
+        flareSelectionMode: false,
+        flareSourceAreaIdx: -1,
+        luckySelectionMode: false,
+        luckySourceAreaIdx: -1,
+        illusionSelectionMode: false,
+        illusionSourceAreaIdx: -1,
+        frostSelectionMode: false,
+        frostSourceAreaIdx: -1,
+    };
+}
+
+/*
  * 傷害計算：防禦是「逐次攻擊」扣減，不是扣總量。
  * 這一點決定了整個戰術評估的形狀 —— 同樣 6 點攻擊力，面對 2 點防禦時
  * 2+2+2 造成 0 傷害，而單一個 6 造成 4 傷害。集中打擊遠優於分散。
