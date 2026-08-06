@@ -2761,6 +2761,7 @@ function handleDamagePhase() {
     if (defeated) {
         S.winner = opp.name;
         winModalDismissed = false;
+        addLog(`遊戲結束！${getWinnerLabel()}勝利！`);
     }
 }
 
@@ -3182,7 +3183,7 @@ function useSoulSnatch(areaIdx) {
             if (opp.hp <= 0) {
                 S.winner = p.name;
                 winModalDismissed = false;
-                addLog(`遊戲結束！${S.winner} 獲得勝利！`);
+                addLog(`遊戲結束！${getWinnerLabel()}勝利！`);
             }
             render();
         } else {
@@ -3224,6 +3225,23 @@ function renderComputerTurnGuard() {
     return guard;
 }
 
+/*
+ * 勝利者要怎麼稱呼。
+ *
+ * S.winner 存的是玩家名稱，但那個名稱在 PvP 是「玩家 A / 玩家 B」，
+ * 對玩家來說沒有意義 —— 場上是用底色分辨敵我的（先手紅、後手藍，
+ * 和玩家區塊的底色一致），所以這裡也用顏色講。
+ * 人機對戰則直接說電腦或玩家。
+ */
+function getWinnerLabel(): string {
+    if (!S.winner) return '';
+    const idx = S.players.findIndex(pl => pl.name === S.winner);
+    if (idx === -1) return S.winner;
+    const computerIdx = getComputerPlayerIndexForMode(selectedMode);
+    if (computerIdx !== null) return idx === computerIdx ? '電腦' : '玩家';
+    return idx === 0 ? '紅色玩家' : '藍色玩家';
+}
+
 function renderWinModalOverlay() {
     if (!S.winner || winModalDismissed) return null;
 
@@ -3238,7 +3256,7 @@ function renderWinModalOverlay() {
         <div class="px-5 py-4 bg-slate-950/40 border-b border-slate-800 text-center">
             <div class="text-[10px] font-black text-slate-300 uppercase tracking-[0.35em]">對局結束</div>
             <div class="mt-1 text-[20px] sm:text-3xl font-black text-white tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">
-                ${S.winner} 獲勝
+                ${getWinnerLabel()}勝利
             </div>
         </div>
         <div class="px-5 py-4 text-center">
@@ -3350,12 +3368,24 @@ function handleBuyPhase() {
     render();
 }
 
+/*
+ * 牌庫抽牌的成本標示。
+ * 「-0金幣」讀起來像扣了 0 塊錢，直接寫「免費」清楚得多；
+ * 牌庫抽完時也別留一個看不懂的破折號。
+ */
+function renderDeckCostLabel(deckCount: number, cost: number) {
+    if (deckCount === 0) return '牌庫已空';
+    if (!Number.isFinite(cost)) return '—';
+    if (cost === 0) return '免費';
+    return `-${cost}金幣`;
+}
+
 function renderGoldDots(cost: number) {
     if (!Number.isFinite(cost)) {
         return '<div class="text-[10px] font-black text-slate-400">—</div>';
     }
     if (cost === 0) {
-        return '<div class="text-[10px] font-black text-emerald-700">FREE</div>';
+        return '<div class="text-[10px] font-black text-emerald-700">免費</div>';
     }
     const dots = Array.from({length: Math.min(cost, 6)}, () => '<span class="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-sm"></span>').join('');
     return `<div class="flex items-center gap-1">${dots}<span class="ml-1 text-[10px] font-black text-amber-700">${cost}</span></div>`;
@@ -3408,10 +3438,12 @@ function renderMarketPanel(typeColors) {
 
     const deckMeta = document.createElement('div');
     deckMeta.className = 'w-full flex items-center justify-between px-1';
-    deckMeta.innerHTML = `
-        <div class="text-[10px] font-black text-slate-500">抽第 ${nextDrawIndex} 張</div>
-        ${renderGoldDots(nextDrawCost)}
-    `;
+    deckMeta.innerHTML = S.deck.length === 0
+        ? '<div class="text-[10px] font-black text-slate-500">牌庫已空</div>'
+        : `
+            <div class="text-[10px] font-black text-slate-500">抽第 ${nextDrawIndex} 張</div>
+            ${renderGoldDots(nextDrawCost)}
+        `;
 
     deckWrap.appendChild(deckCard);
     deckWrap.appendChild(deckMeta);
@@ -3730,6 +3762,8 @@ function renderMobileActionBar() {
     let displayPhaseHint = getActionBlockReason() || S.phaseHint;
     if (S.luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
     if (S.illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
+    // 分出勝負後不要停在「受傷 N」這種階段中的提示
+    if (S.winner) displayPhaseHint = `${getWinnerLabel()}勝利`;
 
     const step = document.createElement('div');
     step.className = 'shrink-0 px-2 py-1 rounded-none bg-[#dcdad3] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420] tracking-wider whitespace-nowrap';
@@ -3863,9 +3897,7 @@ function renderMobileMarketRow(typeColors) {
     // 顯示「抽牌成本」在牌庫卡下方（動態）
     const deckCostTag = document.createElement('div');
     deckCostTag.className = 'mt-1 text-[10px] font-black text-slate-500 text-center';
-    deckCostTag.innerText = (S.deck.length === 0 || !Number.isFinite(nextDrawCost))
-        ? '—'
-        : `-${nextDrawCost}金幣`;
+    deckCostTag.innerText = renderDeckCostLabel(S.deck.length, nextDrawCost);
 
     const deckWrap = document.createElement('div');
     deckWrap.className = 'flex flex-col items-center';
@@ -4627,7 +4659,7 @@ function render() {
     const phaseSection = document.createElement('div');
     phaseSection.className = 'absolute left-[42%] -translate-x-1/2 flex items-center justify-center';
     
-    let displayPhaseHint = S.phaseHint;
+    let displayPhaseHint = S.winner ? `${getWinnerLabel()}勝利` : S.phaseHint;
     if (S.luckySelectionMode) {
         displayPhaseHint = '幸運：移除1骰';
     }
