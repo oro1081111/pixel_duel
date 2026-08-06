@@ -205,7 +205,16 @@ export class SimulationGame {
    */
   rolloutNoise = false;
 
-  banditConfig: BanditConfig = DEFAULT_BANDIT_CONFIG;
+  /*
+   * 每個座位各自的 bandit 設定。
+   * 兩邊可以不同，才能讓「高預算」與「低預算」直接對打 ——
+   * 都拿去打 expert 的話，雙方勝率都逼近天花板，量不出彼此的差距。
+   */
+  banditConfigs: [BanditConfig, BanditConfig] = [DEFAULT_BANDIT_CONFIG, DEFAULT_BANDIT_CONFIG];
+
+  private currentBanditConfig() {
+    return this.banditConfigs[this.currentPlayerIndex];
+  }
 
   constructor(
     private readonly initialHp: number,
@@ -437,7 +446,7 @@ export class SimulationGame {
       this.currentPhaseIndex = 1;
       return;
     }
-    const plan = banditChoosePlayPlan(this, this.banditConfig);
+    const plan = banditChoosePlayPlan(this, this.currentBanditConfig());
     if (plan) {
       for (const step of plan) {
         const handIdx = p.hand.findIndex(c => c.id === step.cardId);
@@ -456,7 +465,7 @@ export class SimulationGame {
     for (let i = 0; i < 200 && this.winner === null; i++) {
       const acts = this.availableActivations();
       if (acts.length === 0) return;
-      const choice = banditChooseActivation(this, phase, this.banditConfig);
+      const choice = banditChooseActivation(this, phase, this.currentBanditConfig());
       if (choice === 'STOP') return;
       acts.find(a => a.effectId === choice.effectId && a.areaIdx === choice.areaIdx)?.run();
       this.currentPhaseIndex = phase;
