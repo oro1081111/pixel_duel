@@ -150,7 +150,7 @@ export type GameState = {
 };
 
 export function createGameState(
-    playerNames: [string, string] = ['玩家 A', '玩家 B'],
+    playerNames: [string, string] = ['紅色玩家', '藍色玩家'],
 ): GameState {
     return {
         deck: [],

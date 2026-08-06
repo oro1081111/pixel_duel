@@ -574,7 +574,12 @@ let appScreen: AppScreen = 'home';
 let selectedMode: GameMode | null = null;
 
 // Match config
-let matchPlayerNames: [string, string] = ['玩家 A', '玩家 B'];
+/*
+ * PvP 兩邊都叫玩家，用 A / B 區分沒有意義 —— 場上是靠底色分敵我的
+ * （先手紅、後手藍，和玩家區塊的底色一致），所以名稱直接用顏色講。
+ * 這樣區塊標題、戰報、勝利訊息用的是同一個字，不會各說各話。
+ */
+let matchPlayerNames: [string, string] = ['紅色玩家', '藍色玩家'];
 
 // 防止使用者連點「繼續」造成階段被推進兩次（看起來像跳過判定階段）
 let phaseAdvanceLockUntil = 0;
@@ -634,7 +639,7 @@ function setMatchPlayerNamesForMode(mode: GameMode) {
         matchPlayerNames = ['玩家', '電腦'];
         return;
     }
-    matchPlayerNames = ['玩家 A', '玩家 B'];
+    matchPlayerNames = ['紅色玩家', '藍色玩家'];
 }
 
 // 「回首頁」和「重新開始」都會丟掉整場進度，所以共用同一套確認流程；
@@ -2761,7 +2766,7 @@ function handleDamagePhase() {
     if (defeated) {
         S.winner = opp.name;
         winModalDismissed = false;
-        addLog(`遊戲結束！${getWinnerLabel()}勝利！`);
+        addLog(`遊戲結束！${S.winner}勝利！`);
     }
 }
 
@@ -3183,7 +3188,7 @@ function useSoulSnatch(areaIdx) {
             if (opp.hp <= 0) {
                 S.winner = p.name;
                 winModalDismissed = false;
-                addLog(`遊戲結束！${getWinnerLabel()}勝利！`);
+                addLog(`遊戲結束！${S.winner}勝利！`);
             }
             render();
         } else {
@@ -3225,23 +3230,6 @@ function renderComputerTurnGuard() {
     return guard;
 }
 
-/*
- * 勝利者要怎麼稱呼。
- *
- * S.winner 存的是玩家名稱，但那個名稱在 PvP 是「玩家 A / 玩家 B」，
- * 對玩家來說沒有意義 —— 場上是用底色分辨敵我的（先手紅、後手藍，
- * 和玩家區塊的底色一致），所以這裡也用顏色講。
- * 人機對戰則直接說電腦或玩家。
- */
-function getWinnerLabel(): string {
-    if (!S.winner) return '';
-    const idx = S.players.findIndex(pl => pl.name === S.winner);
-    if (idx === -1) return S.winner;
-    const computerIdx = getComputerPlayerIndexForMode(selectedMode);
-    if (computerIdx !== null) return idx === computerIdx ? '電腦' : '玩家';
-    return idx === 0 ? '紅色玩家' : '藍色玩家';
-}
-
 function renderWinModalOverlay() {
     if (!S.winner || winModalDismissed) return null;
 
@@ -3256,7 +3244,7 @@ function renderWinModalOverlay() {
         <div class="px-5 py-4 bg-slate-950/40 border-b border-slate-800 text-center">
             <div class="text-[10px] font-black text-slate-300 uppercase tracking-[0.35em]">對局結束</div>
             <div class="mt-1 text-[20px] sm:text-3xl font-black text-white tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">
-                ${getWinnerLabel()}勝利
+                ${S.winner}勝利
             </div>
         </div>
         <div class="px-5 py-4 text-center">
@@ -3763,7 +3751,7 @@ function renderMobileActionBar() {
     if (S.luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
     if (S.illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
     // 分出勝負後不要停在「受傷 N」這種階段中的提示
-    if (S.winner) displayPhaseHint = `${getWinnerLabel()}勝利`;
+    if (S.winner) displayPhaseHint = `${S.winner}勝利`;
 
     const step = document.createElement('div');
     step.className = 'shrink-0 px-2 py-1 rounded-none bg-[#dcdad3] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420] tracking-wider whitespace-nowrap';
@@ -4659,7 +4647,7 @@ function render() {
     const phaseSection = document.createElement('div');
     phaseSection.className = 'absolute left-[42%] -translate-x-1/2 flex items-center justify-center';
     
-    let displayPhaseHint = S.winner ? `${getWinnerLabel()}勝利` : S.phaseHint;
+    let displayPhaseHint = S.winner ? `${S.winner}勝利` : S.phaseHint;
     if (S.luckySelectionMode) {
         displayPhaseHint = '幸運：移除1骰';
     }
