@@ -171,7 +171,13 @@ export type BanditConfig = {
     playBudget: number;
     /** 效果階段每次決策的 rollout 總預算 */
     effectBudget: number;
-    /** 出牌候選先預篩到幾個，再進 SH */
+    /**
+     * 出牌候選先預篩到幾個，再進 SH。
+     *
+     * 實測（兩組設定直接對打，各 500 局）顯示這個值比「每個候選模擬幾次」重要得多：
+     * 把模擬次數加 4 倍幾乎沒差（+0.8pp），把候選數與預篩上限加 4 倍卻有 +8.4pp。
+     * 也就是說搜尋早就收斂了，瓶頸在「有沒有把好棋放進候選池」。
+     */
     playCandidateCap: number;
     /**
      * 預篩方式。
@@ -183,10 +189,13 @@ export type BanditConfig = {
     /**
      * rollout 預篩開始前，候選數的上限；超過就先隨機抽樣。
      *
-     * 預篩成本正比於候選數，而候選數隨手牌張數暴增（9 張手牌有 4743 個方案）。
-     * 不設上限的話 p99 延遲會到 1 秒以上 —— 中位數很漂亮但偶爾凍結一下，
-     * 玩家感覺到的是後者。隨機抽樣會丟掉候選，但不引入任何偏好，
-     * 而且方案之間高度重複，抽樣損失比表面上小。
+     * 需要上限的原因：預篩成本正比於候選數，而候選數隨手牌張數暴增
+     * （9 張手牌有 4743 個方案）。完全不設限時 p99 延遲會到 1 秒以上 ——
+     * 中位數很漂亮但偶爾凍結一下，玩家感覺到的是後者。
+     *
+     * 值定在 384 是量出來的：96 -> 384 有 +8.4pp（3.75σ），
+     * 384 -> 768 只剩 +2.8pp（1.25σ，不顯著），所以效益在這附近飽和。
+     * 隨機抽樣會丟掉候選，但不引入任何偏好，而且方案之間高度重複。
      */
     maxPrefilterArms: number;
 };
@@ -194,9 +203,9 @@ export type BanditConfig = {
 export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
     playBudget: 300,
     effectBudget: 100,
-    playCandidateCap: 16,
+    playCandidateCap: 32,
     playPrefilter: 'rollout',
-    maxPrefilterArms: 96,
+    maxPrefilterArms: 384,
 };
 
 /*

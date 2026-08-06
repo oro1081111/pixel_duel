@@ -10,7 +10,7 @@ import {
 } from './game';
 import {DEFAULT_BANDIT_CONFIG} from './bandit';
 
-type MatchupMode = 'custom' | 'expert-mirror' | 'expert-normal' | 'bandit-expert';
+type MatchupMode = 'custom' | 'expert-mirror' | 'expert-normal' | 'bandit-expert' | 'bandit-tune';
 
 function isAiDifficulty(v: string): v is AiDifficulty {
   return v === 'normal' || v === 'expert' || v === 'bandit';
@@ -27,6 +27,8 @@ function parseArgs() {
     p1Ai: 'normal' as AiDifficulty,
     matchup: 'custom' as MatchupMode,
     banditConfig: {...DEFAULT_BANDIT_CONFIG},
+    // 對照組設定，給 bandit-tune 用（B 方坐第二席）
+    banditConfigB: {...DEFAULT_BANDIT_CONFIG},
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -69,6 +71,18 @@ function parseArgs() {
     } else if (arg === '--max-prefilter-arms' && next) {
       opts.banditConfig.maxPrefilterArms = Number(next);
       i++;
+    } else if (arg === '--b-play-budget' && next) {
+      opts.banditConfigB.playBudget = Number(next);
+      i++;
+    } else if (arg === '--b-effect-budget' && next) {
+      opts.banditConfigB.effectBudget = Number(next);
+      i++;
+    } else if (arg === '--b-max-prefilter-arms' && next) {
+      opts.banditConfigB.maxPrefilterArms = Number(next);
+      i++;
+    } else if (arg === '--b-play-cap' && next) {
+      opts.banditConfigB.playCandidateCap = Number(next);
+      i++;
     } else if (arg === '--prefilter' && next) {
       if (next !== 'heuristic' && next !== 'rollout') {
         throw new Error('--prefilter must be "heuristic" or "rollout"');
@@ -80,8 +94,8 @@ function parseArgs() {
       i++;
     } else if (arg === '--matchup' && next) {
       if (next !== 'custom' && next !== 'expert-mirror' && next !== 'expert-normal'
-          && next !== 'bandit-expert') {
-        throw new Error('--matchup must be "custom", "expert-mirror", "expert-normal" or "bandit-expert"');
+          && next !== 'bandit-expert' && next !== 'bandit-tune') {
+        throw new Error('--matchup must be "custom", "expert-mirror", "expert-normal", "bandit-expert" or "bandit-tune"');
       }
       opts.matchup = next;
       i++;
@@ -114,7 +128,7 @@ type SeriesStats = {
   elapsedMs: number;
 };
 
-function runSeries(opts: ReturnType<typeof parseArgs>, p0Ai: AiDifficulty, p1Ai: AiDifficulty): SeriesStats {
+function runSeries(opts: ReturnType<typeof parseArgs>, p0Ai: AiDifficulty, p1Ai: AiDifficulty, swapConfigs = false): SeriesStats {
   const started = performance.now();
   let firstWins = 0;
   let secondWins = 0;
@@ -123,7 +137,9 @@ function runSeries(opts: ReturnType<typeof parseArgs>, p0Ai: AiDifficulty, p1Ai:
 
   for (let i = 0; i < opts.games; i++) {
     const game = new SimulationGame(opts.hp, opts.maxTurns, opts.opening, [p0Ai, p1Ai]);
-    game.banditConfig = opts.banditConfig;
+    game.banditConfigs = swapConfigs
+      ? [opts.banditConfigB, opts.banditConfig]
+      : [opts.banditConfig, opts.banditConfigB];
     const result = game.run();
     totalTurns += result.turns;
     if (result.winner === 0) firstWins++;
@@ -212,6 +228,39 @@ function main() {
 
   if (opts.matchup === 'bandit-expert') {
     runTwoLegMatchup(opts, 'bandit', 'expert');
+    return;
+  }
+
+  /*
+   * 兩組 bandit 設定直接對打。
+   * 拿兩邊各自去打 expert 是量不出差距的 —— 都已經七成多，逼近天花板。
+   */
+  if (opts.matchup === 'bandit-tune') {
+    const fmt = (c: typeof opts.banditConfig) =>
+      `出牌 ${c.playBudget} / 效果 ${c.effectBudget} / 候選 ${c.playCandidateCap} / 預篩上限 ${c.maxPrefilterArms}`;
+    console.log(`A: ${fmt(opts.banditConfig)}`);
+    console.log(`B: ${fmt(opts.banditConfigB)}`);
+    console.log('');
+
+    console.log('--- Leg 1: A 先手 ---');
+    const leg1 = runSeries(opts, 'bandit', 'bandit', false);
+    printSeries(leg1);
+    console.log('');
+    console.log('--- Leg 2: B 先手 ---');
+    const leg2 = runSeries(opts, 'bandit', 'bandit', true);
+    printSeries(leg2);
+    console.log('');
+
+    const total = leg1.games + leg2.games;
+    const aWins = leg1.firstWins + leg2.secondWins;
+    const bWins = leg1.secondWins + leg2.firstWins;
+    const se = Math.sqrt(0.25 / total) * 100;
+    console.log('--- Aggregate ---');
+    console.log(`Total: ${total}`);
+    console.log(`A wins: ${aWins} (${formatPct(aWins, total)})`);
+    console.log(`B wins: ${bWins} (${formatPct(bWins, total)})`);
+    console.log(`50% 的抽樣誤差約 ±${se.toFixed(2)}%（1 sigma）`);
+    console.log(`Elapsed: ${((leg1.elapsedMs + leg2.elapsedMs) / 1000).toFixed(1)}s`);
     return;
   }
 
