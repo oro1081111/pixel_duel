@@ -217,6 +217,59 @@ export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
 };
 
 /*
+ * 全程砍一半：512>256>128>64>32>16>8>4>2>1，模擬 1,1,1,1,2,4,8,16,32。
+ * 成本 1280、冠軍樣本 66（預設值是 800、33）。
+ *
+ * 量過了：對預設值 1300 局合併後 50.7% / 49.3%（1.0 sigma），沒有差別。
+ * 多花 60% 運算買不到東西，所以沒有採用。
+ *
+ * 第一次測出 +8pp（3.57 sigma）但重測不成立 —— 那次是假訊號。
+ * 破綻是傳遞性：merged > halving > gentle > merged 形成循環，
+ * 三個兩兩比較加起來矛盾約 16pp。單看一次結果的 sigma 值會被這種東西騙過去，
+ * 尤其在同一輪調參跑了十幾次 A/B 的情況下（多重比較）。
+ */
+export const GENTLE_BANDIT_CONFIG: BanditConfig = {
+    playPool: 512,
+    playLadder: [
+        {samples: 1, keep: 256},
+        {samples: 1, keep: 128},
+        {samples: 1, keep: 64},
+        {samples: 1, keep: 32},
+        {samples: 2, keep: 16},
+        {samples: 4, keep: 8},
+        {samples: 8, keep: 4},
+        {samples: 16, keep: 2},
+        {samples: 32, keep: 1},
+    ],
+    effectBudget: 100,
+};
+
+/*
+ * 全程砍一半，但決賽圈每階只花 32 次（不是 64）。成本 1120、冠軍樣本 35。
+ *
+ * 和 GENTLE 一樣，量過對預設值沒有可測差異。留著這兩個 preset 是為了記錄
+ * 「階梯形狀已經調到不重要了」這個結論，並讓之後想重驗的人可以直接 --ladder 跑。
+ *
+ * 要注意這類比較的解析度：500 局的 1 sigma 是 ±2.24%，而這些變體之間的真實差距
+ * 看起來在 2~3pp 以內 —— 想分辨得出來，每次比較大概需要 3000 局以上。
+ */
+export const HALVING_BANDIT_CONFIG: BanditConfig = {
+    playPool: 512,
+    playLadder: [
+        {samples: 1, keep: 256},
+        {samples: 1, keep: 128},
+        {samples: 1, keep: 64},
+        {samples: 1, keep: 32},
+        {samples: 1, keep: 16},
+        {samples: 2, keep: 8},
+        {samples: 4, keep: 4},
+        {samples: 8, keep: 2},
+        {samples: 16, keep: 1},
+    ],
+    effectBudget: 100,
+};
+
+/*
  * 舊的做法：預篩與 Successive Halving 是兩套獨立機制，預篩累積的樣本進 SH 時被丟掉。
  * 寫成階梯只是為了能和新版直接對打比較，不是拿來用的。
  */

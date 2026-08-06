@@ -8,11 +8,13 @@ import {
   type OpeningMode,
   SimulationGame,
 } from './game';
-import {type BanditConfig, DEFAULT_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
+import {type BanditConfig, DEFAULT_BANDIT_CONFIG, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
 
 // 給 --ladder / --b-ladder 用的階梯預設值，方便兩種形狀直接對打
 const LADDER_PRESETS: Record<string, BanditConfig> = {
   merged: DEFAULT_BANDIT_CONFIG,
+  gentle: GENTLE_BANDIT_CONFIG,
+  halving: HALVING_BANDIT_CONFIG,
   legacy: LEGACY_BANDIT_CONFIG,
 };
 
