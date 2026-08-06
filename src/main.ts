@@ -15,6 +15,9 @@ import {
     damageThroughDefense,
 } from './engine/state';
 import {resolveDamagePhase, resolveJudging} from './engine/resolve';
+// 「專家」電腦用的模擬決策引擎（見 src/sim/bandit.ts）
+import {SimulationGame} from './sim/game';
+import {banditChooseActivation, banditChoosePlayPlan} from './sim/bandit';
 import {
     applyAmplify,
     applyBarrier,
@@ -878,6 +881,43 @@ function renderHomeMenuButtonHTML(
     `;
 }
 
+/*
+ * 電腦強度切換。做成兩格分段按鈕而不是開關，因為「高手 / 專家」是並列的兩個
+ * 選項，開關會讓人以為其中一個是「關掉」的狀態。
+ * 只影響 CvP / PvC；PvP 沒有電腦。
+ */
+function renderAiLevelToggleHTML() {
+    const cell = (level: AiLevel, hint: string) => {
+        const on = aiLevel === level;
+        return `
+            <button
+                id="aiLevel-${level}"
+                aria-pressed="${on}"
+                class="flex-1 rounded-none px-2 py-1.5 border-[3px] leading-none whitespace-nowrap ${
+                    on
+                        ? 'bg-[#c48e36] border-[#c48e36] shadow-[2px_2px_0_0_#011c31]'
+                        : 'bg-[#16344c] border-[#3d5e7a] hover:border-[#c48e36]'
+                }"
+            >
+                <span class="text-[14px] font-black ${on ? 'text-[#0d2032]' : 'text-[#e7c980]'}">
+                    ${AI_LEVEL_LABEL[level]}
+                </span>
+                <span class="ml-1.5 text-[10px] font-bold ${on ? 'text-[#0d2032]/70' : 'text-white/50'}">
+                    ${hint}
+                </span>
+            </button>
+        `;
+    };
+    // 單行排版：首頁在 iPhone SE 上原本剛好塞滿，多一個兩行區塊就會把版權文字擠出畫面
+    return `
+        <div class="mt-3 flex items-center gap-2">
+            <span class="text-[10px] font-black tracking-[0.15em] text-white/40 shrink-0">電腦強度</span>
+            ${cell('adept', '出手快')}
+            ${cell('expert', '較強')}
+        </div>
+    `;
+}
+
 function renderHomeScreen() {
     const wrap = document.createElement('div');
     wrap.className = 'min-h-[100dvh] w-full bg-[#0d2032] text-white font-sans flex items-center justify-center p-4 sm:p-6';
@@ -888,7 +928,7 @@ function renderHomeScreen() {
                 <img
                     src="${COVER_IMG_URL}"
                     alt="像素對決 PIXEL DUEL 封面"
-                    class="card-thumb w-auto max-w-[340px] max-h-[40dvh] sm:max-w-[400px] sm:max-h-none select-none"
+                    class="card-thumb w-auto max-w-[340px] max-h-[40dvh] [@media(max-height:700px)]:max-h-[33dvh] sm:max-w-[400px] sm:max-h-none select-none"
                     draggable="false"
                     loading="eager"
                     decoding="async"
@@ -905,6 +945,8 @@ function renderHomeScreen() {
                 ${renderHomeMenuButtonHTML('rulesBtn', '規則', '玩法教學 / 回合流程', '#d0c954', 'sm:col-start-2')}
             </div>
 
+            ${renderAiLevelToggleHTML()}
+
             <div class="mt-5 sm:mt-8 text-center leading-relaxed">
                 <div class="text-[12px] font-black text-[#e7c980]/90">遊戲設計與美術：周允成-奧羅</div>
                 <div class="mt-1.5 text-[11px] font-bold text-white/45">奧羅桌遊設計工作室-練習作品</div>
@@ -917,6 +959,13 @@ function renderHomeScreen() {
     (wrap.querySelector('#modeCvp') as HTMLButtonElement).onclick = () => startCvpGame();
     (wrap.querySelector('#modePvc') as HTMLButtonElement).onclick = () => startPvcGame();
     (wrap.querySelector('#rulesBtn') as HTMLButtonElement).onclick = () => showRules();
+    (['adept', 'expert'] as const).forEach(level => {
+        const btn = wrap.querySelector(`#aiLevel-${level}`) as HTMLButtonElement | null;
+        if (btn) btn.onclick = () => {
+            aiLevel = level;
+            render();
+        };
+    });
     return wrap;
 }
 
@@ -1246,6 +1295,34 @@ let computerBusy = false;
 // - 2.0 = 2x faster (half the delay)
 // - 0.5 = half speed (double the delay)
 let aiSpeed = 0.7;
+
+/*
+ * 電腦強度。
+ *  - 'adept'（高手）：原本的啟發式 AI，靠手調權重評分。
+ *  - 'expert'（專家）：模擬決策 AI，把每個候選實際打過幾百次再挑。
+ * 兩者共用同一套規則與同一個回合流程，差別只在「出牌」與「效果發動」怎麼決定。
+ */
+type AiLevel = 'adept' | 'expert';
+let aiLevel: AiLevel = 'expert';
+
+const AI_LEVEL_LABEL: Record<AiLevel, string> = {adept: '高手', expert: '專家'};
+
+/*
+ * 把當前局面複製進無頭引擎，給「專家」當思考沙盤。
+ * 深拷貝，所以它在裡面怎麼試打都不會動到真實對局。
+ */
+function makeAiSandbox(): SimulationGame {
+    return SimulationGame.forThinking({
+        deck: S.deck,
+        market: S.market,
+        players: S.players,
+        currentPlayerIndex: S.currentPlayerIndex as 0 | 1,
+        currentPhaseIndex: S.currentPhaseIndex,
+        diceResults: S.diceResults,
+        firstPlayerFirstTurn: S.firstPlayerFirstTurn,
+        buyDeckDrawCount: S.buyDeckDrawCount,
+    });
+}
 
 function randInt(minInclusive: number, maxInclusive: number) {
     return Math.floor(Math.random() * (maxInclusive - minInclusive + 1)) + minInclusive;
@@ -2138,6 +2215,28 @@ async function aiActivationLoopStep() {
     const acts = getAvailableActivationsForCurrentPlayer();
     if (acts.length === 0) return false;
 
+    /*
+     * 專家：把「發動這個效果」與「不發動」各模擬幾十次到回合結束再挑。
+     * 每次只決定下一個原子行動，做完重新搜 —— 發動幾次、什麼順序會自然浮現。
+     */
+    if (aiLevel === 'expert') {
+        const choice = banditChooseActivation(makeAiSandbox(), S.currentPhaseIndex);
+        if (choice === 'STOP') {
+            await sleep(randInt(140, 260));
+            return false;
+        }
+        // 用效果身分對映，不用索引 —— UI 這份清單是自己算的
+        const chosen = acts.find(a => a.effectId === choice.effectId && a.areaIdx === choice.areaIdx);
+        if (!chosen) {
+            await sleep(randInt(140, 260));
+            return false;
+        }
+        logAi(`${getAiName()} 發動效果：${chosen.label}`);
+        await sleep(randInt(280, 520));
+        chosen.run();
+        return true;
+    }
+
     const scored = acts.map(act => ({
         act,
         score: scoreActivationForExpert(act.label) + Math.random() * 0.1,
@@ -2167,21 +2266,43 @@ async function aiDoPlayPhase() {
         return;
     }
 
-    const maxPlays = S.inPreparationPhase ? 1 : Math.min(3, p.hand.length);
-    const playCount = Math.min(maxPlays, Math.max(1, chooseExpertPlayCount()));
-    logAi(`${getAiName()} 出牌：規劃打出 ${playCount} 張`);
-    await sleep(randInt(250, 450));
+    /*
+     * 專家：把「打幾張、哪幾張、放哪一區」當成完整方案來比較，各模擬數十次。
+     * 準備階段只能出 1 張，方案取第一步就好。
+     */
+    if (aiLevel === 'expert') {
+        const plan = banditChoosePlayPlan(makeAiSandbox()) ?? [];
+        const steps = S.inPreparationPhase ? plan.slice(0, 1) : plan;
+        logAi(`${getAiName()} 出牌：規劃打出 ${steps.length} 張`);
+        await sleep(randInt(250, 450));
 
-    for (let i = 0; i < playCount; i++) {
-        const choice = chooseExpertPlay();
-        if (!choice) break;
-        const cardName = p.hand[choice.handIdx]?.effectName || '未知';
-        S.selectedHandCardIndex = choice.handIdx;
-        logAi(`${getAiName()} 出牌：「${cardName}」→ 區域${choice.areaIdx + 1}`);
-        await sleep(randInt(260, 480));
-        playToBoard(choice.areaIdx);
-        await sleep(randInt(160, 300));
-        if (S.inPreparationPhase) break;
+        for (const step of steps) {
+            const handIdx = p.hand.findIndex(c => c.id === step.cardId);
+            if (handIdx === -1) continue;
+            const cardName = p.hand[handIdx]?.effectName || '未知';
+            S.selectedHandCardIndex = handIdx;
+            logAi(`${getAiName()} 出牌：「${cardName}」→ 區域${step.areaIdx + 1}`);
+            await sleep(randInt(260, 480));
+            playToBoard(step.areaIdx);
+            await sleep(randInt(160, 300));
+        }
+    } else {
+        const maxPlays = S.inPreparationPhase ? 1 : Math.min(3, p.hand.length);
+        const playCount = Math.min(maxPlays, Math.max(1, chooseExpertPlayCount()));
+        logAi(`${getAiName()} 出牌：規劃打出 ${playCount} 張`);
+        await sleep(randInt(250, 450));
+
+        for (let i = 0; i < playCount; i++) {
+            const choice = chooseExpertPlay();
+            if (!choice) break;
+            const cardName = p.hand[choice.handIdx]?.effectName || '未知';
+            S.selectedHandCardIndex = choice.handIdx;
+            logAi(`${getAiName()} 出牌：「${cardName}」→ 區域${choice.areaIdx + 1}`);
+            await sleep(randInt(260, 480));
+            playToBoard(choice.areaIdx);
+            await sleep(randInt(160, 300));
+            if (S.inPreparationPhase) break;
+        }
     }
 
     if (S.inPreparationPhase && S.players[1].cardsPlayedThisTurn >= 1) {

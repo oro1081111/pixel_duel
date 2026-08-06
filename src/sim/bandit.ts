@@ -1,5 +1,5 @@
 import type {GameCard} from '../engine/state';
-import type {SimulationGame} from './runSimulation';
+import type {SimulationGame} from './game';
 import {shuffled} from '../engine/deck';
 import {makeRng, rng, withRng} from './rng';
 
@@ -418,7 +418,7 @@ export function banditChoosePlayPlan(
  * 而且候選數天生就很少（場上最多 3 張效果卡），所以這裡不用 Successive Halving，
  * 直接把預算平均分給每個候選就好 —— 少一套要維護與除錯的邏輯。
  */
-export type ActivationChoice = {index: number} | 'STOP';
+export type ActivationChoice = {effectId: string; areaIdx: number} | 'STOP';
 
 export function banditChooseActivation(
     game: SimulationGame,
@@ -429,7 +429,11 @@ export function banditChooseActivation(
     const options = game.availableActivationsPublic();
     if (options.length === 0) return 'STOP';
 
-    const arms: ActivationChoice[] = ['STOP', ...options.map((_, index) => ({index}))];
+    type Arm = 'STOP' | {index: number; effectId: string; areaIdx: number};
+    const arms: Arm[] = [
+        'STOP',
+        ...options.map((o, index) => ({index, effectId: o.effectId, areaIdx: o.areaIdx})),
+    ];
     const samplesPerArm = Math.max(2, Math.floor(cfg.effectBudget / arms.length));
     const seedBase = Math.floor(Math.random() * 1e9);
 
@@ -440,9 +444,8 @@ export function banditChooseActivation(
             const outcome = withRng(makeRng(seed), () => {
                 const clone = game.cloneForRollout();
                 if (entry.arm !== 'STOP') {
-                    const acts = clone.availableActivationsPublic();
                     // clone 的盤面與本體相同，選項順序也相同
-                    acts[entry.arm.index]?.run();
+                    clone.availableActivationsPublic()[entry.arm.index]?.run();
                 }
                 // STOP 代表「這個階段不再發動」，rollout 也必須跳過本階段剩下的發動，
                 // 否則 STOP 會退化成「讓 expert 決定」，跟其他候選比不出差別。
@@ -454,5 +457,8 @@ export function banditChooseActivation(
     }
 
     entries.sort((x, y) => compareArms(y.stats, x.stats));
-    return entries[0].arm;
+    const best = entries[0].arm;
+    if (best === 'STOP') return 'STOP';
+    // 只回傳效果身分。呼叫端（UI）的候選清單是自己算的，用索引對映不保險。
+    return {effectId: best.effectId, areaIdx: best.areaIdx};
 }
