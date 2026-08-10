@@ -206,6 +206,15 @@ export class SimulationGame {
   rolloutNoise = false;
 
   /*
+   * 選用的規則事件記錄（UI 端傳的是寫戰報的函式）。
+   * 模擬器平常不設，跑幾千局不需要產生文字；量測「哪些被動效果實際觸發」時才掛上。
+   * 被動的觸發條件散在 resolve.ts 各處，在外面另外複製一份條件判斷遲早會走鐘，
+   * 所以用這個 hook 直接聽本體說話。
+   * cloneForRollout 不複製它 —— rollout 內部的觸發不算數。
+   */
+  ruleLog?: (msg: string) => void;
+
+  /*
    * 這一份是不是 bandit 用來試打的複製品。
    * 用來擋住「選目標也用模擬」在 rollout 內部再次觸發 —— 那會遞迴，複雜度指數爆炸。
    * 複製品一律走啟發式，和效果發動的分工一致。
@@ -1233,7 +1242,7 @@ export class SimulationGame {
 
   // 判定的規則本體在 engine/resolve.ts，與 UI 共用同一份
   private handleJudging() {
-    resolveJudging(this.currentPlayer(), this.currentPlayerIndex as 0 | 1, this.diceResults);
+    resolveJudging(this.currentPlayer(), this.currentPlayerIndex as 0 | 1, this.diceResults, this.ruleLog);
   }
 
   // 傷害結算的規則本體在 engine/resolve.ts，與 UI 共用同一份
@@ -1241,7 +1250,7 @@ export class SimulationGame {
     // 先手第一回合不會受到攻擊（對手還沒行動過）
     if (this.currentPlayerIndex === 0 && this.firstPlayerFirstTurn) return;
 
-    const {defeated} = resolveDamagePhase(this.currentPlayer(), this.opponent());
+    const {defeated} = resolveDamagePhase(this.currentPlayer(), this.opponent(), this.ruleLog);
     if (defeated) this.winner = this.opponentIndex();
   }
 
