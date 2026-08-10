@@ -1357,6 +1357,7 @@ export class SimulationGame {
           if (clone.currentPhaseIndex === 2) clone.handleJudgingPublic();
         },
         this.currentBanditConfig().targetBudget,
+        this.currentBanditConfig().fateLadder,
       );
     } else if (this.usesExpertHeuristics()) {
       indices = this.chooseExpertFateDiceIndices();

@@ -1329,6 +1329,7 @@ type AiEngine = {
     banditChooseTarget: typeof import('./sim/bandit').banditChooseTarget;
     enumerateDiceSubsets: typeof import('./sim/bandit').enumerateDiceSubsets;
     targetBudget: number;
+    fateLadder: import('./sim/bandit').LadderStep[] | null;
 };
 
 let aiEnginePromise: Promise<AiEngine | null> | null = null;
@@ -1343,6 +1344,7 @@ function loadAiEngine(): Promise<AiEngine | null> {
                 banditChooseTarget: bandit.banditChooseTarget,
                 enumerateDiceSubsets: bandit.enumerateDiceSubsets,
                 targetBudget: bandit.DEFAULT_BANDIT_CONFIG.targetBudget,
+                fateLadder: bandit.DEFAULT_BANDIT_CONFIG.fateLadder,
             }))
             .catch(() => {
                 /*
@@ -2181,11 +2183,14 @@ function getAvailableActivationsForCurrentPlayer() {
 async function banditPickTarget<T>(
     candidates: T[],
     apply: (clone: import('./sim/game').SimulationGame, candidate: T) => void,
+    ladder?: import('./sim/bandit').LadderStep[] | null,
 ): Promise<T | null> {
     if (aiLevel !== 'expert' || candidates.length <= 1) return null;
     const engine = await loadAiEngine();
     if (!engine) return null;
-    return engine.banditChooseTarget(makeAiSandbox(engine), candidates, apply, engine.targetBudget);
+    return engine.banditChooseTarget(
+        makeAiSandbox(engine), candidates, apply, engine.targetBudget, ladder,
+    );
 }
 
 async function aiResolveSelectionModesStep() {
@@ -2207,6 +2212,8 @@ async function aiResolveSelectionModesStep() {
                 applyFate(clone.currentPlayerPublic(), src, clone.diceResults, subset);
                 clone.handleJudgingPublic();
             },
+            // 命運的候選有幾十個，平均分預算會薄到只剩雜訊，改用淘汰階梯
+            (await loadAiEngine())?.fateLadder,
         )) ?? chooseExpertFateDiceIndices();
         logAi(`${getAiName()} 重擲 ${chosen.length} 顆低價值骰（#${chosen.map(i => i + 1).join(',')}）`);
         await sleep(randInt(280, 500));

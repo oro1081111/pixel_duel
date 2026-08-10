@@ -8,7 +8,7 @@ import {
   type OpeningMode,
   SimulationGame,
 } from './game';
-import {type BanditConfig, DEFAULT_BANDIT_CONFIG, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
+import {type BanditConfig, DEFAULT_BANDIT_CONFIG, FATE_TARGET_LADDER, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
 
 // 給 --ladder / --b-ladder 用的階梯預設值，方便兩種形狀直接對打
 const LADDER_PRESETS: Record<string, BanditConfig> = {
@@ -87,6 +87,13 @@ function parseArgs() {
       i++;
     } else if (arg === '--b-sim-targets' && next) {
       opts.banditConfigB.simulateTargets = next === 'true';
+      i++;
+    } else if (arg === '--fate-ladder' && next) {
+      // on = 專用淘汰階梯；off = 和其他三張一樣平均分 targetBudget
+      opts.banditConfig.fateLadder = next === 'on' ? FATE_TARGET_LADDER : null;
+      i++;
+    } else if (arg === '--b-fate-ladder' && next) {
+      opts.banditConfigB.fateLadder = next === 'on' ? FATE_TARGET_LADDER : null;
       i++;
     } else if (arg === '--effect-budget' && next) {
       opts.banditConfig.effectBudget = Number(next);

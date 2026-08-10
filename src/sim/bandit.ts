@@ -207,7 +207,32 @@ export type BanditConfig = {
      * 留成開關是為了能在同一個難度下直接對打比較，不然分不出這件事值不值得。
      */
     simulateTargets: boolean;
+    /**
+     * 命運之石專用的淘汰階梯（null 則和其他三張一樣，平均分掉 targetBudget）。
+     *
+     * 為什麼只有它要特別處理：它的候選是「骰子索引的所有非空子集合」，5 顆骰 31 種、
+     * 6 顆骰 63 種，是其他三張（最多 6 個）的十倍。平均分 60 的預算下來每個候選只有
+     * 2 次模擬，就算有 CRN 配對，也幾乎是在雜訊裡挑冠軍。
+     * 它偏偏又是四張裡最常發動的（每局約 0.90 次），所以值得單獨加碼。
+     * 改用階梯而不是單純把預算調大：同樣的錢會集中在活到最後的候選身上。
+     */
+    fateLadder: LadderStep[] | null;
 };
+
+/*
+ * 命運之石的階梯：63 →(1) 16 →(2) 8 →(4) 4 →(8) 2 →(16) 1
+ * 成本約 63 + 32×4 = 191 次模擬，冠軍身上累積 31 個樣本（原本是 2）。
+ *
+ * 形狀沿用出牌階梯的邏輯：第一刀砍狠一點（候選多時每個樣本的資訊量本來就低），
+ * 進決賽圈後放慢並加大樣本。
+ */
+export const FATE_TARGET_LADDER: LadderStep[] = [
+    {samples: 1, keep: 16},
+    {samples: 2, keep: 8},
+    {samples: 4, keep: 4},
+    {samples: 8, keep: 2},
+    {samples: 16, keep: 1},
+];
 
 /*
  * 預設階梯：512 →(1) 128 →(1) 32 →(1) 16 →(2) 8 →(4) 4 →(8) 2 →(16) 1
@@ -230,6 +255,7 @@ export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
     effectBudget: 100,
     targetBudget: 60,
     simulateTargets: true,
+    fateLadder: FATE_TARGET_LADDER,
 };
 
 /*
@@ -260,6 +286,7 @@ export const GENTLE_BANDIT_CONFIG: BanditConfig = {
     effectBudget: 100,
     targetBudget: 60,
     simulateTargets: true,
+    fateLadder: FATE_TARGET_LADDER,
 };
 
 /*
@@ -287,6 +314,7 @@ export const HALVING_BANDIT_CONFIG: BanditConfig = {
     effectBudget: 100,
     targetBudget: 60,
     simulateTargets: true,
+    fateLadder: FATE_TARGET_LADDER,
 };
 
 /*
@@ -309,6 +337,7 @@ export const LEGACY_BANDIT_CONFIG: BanditConfig = {
     effectBudget: 100,
     targetBudget: 60,
     simulateTargets: true,
+    fateLadder: FATE_TARGET_LADDER,
 };
 
 /*
@@ -350,8 +379,13 @@ function runLadder<T>(
 /*
  * 用模擬挑目標。
  *
- * 候選很少（骰子最多 6 顆、對手可複製的卡最多 3 張），所以不做淘汰，
- * 直接把預算平均分給每個候選；同一輪用同一組 seed（Common Random Numbers），
+ * 兩種花錢方式：
+ *  - 沒給階梯（冰霜／幸運／幻象）：候選很少（最多 6 個），不做淘汰，
+ *    直接把 budget 平均分給每個候選。
+ *  - 給了階梯（命運之石）：候選有幾十個，平均分下去每個都只剩兩三次模擬，
+ *    改用和出牌同一套逐輪淘汰，把錢集中在活到最後的候選身上。
+ *
+ * 兩種都用 Common Random Numbers：同一輪對所有候選餵同一個 seed，
  * 比的才是「選這個目標」的差異而不是誰運氣好。
  *
  * apply 由呼叫端提供：它要在複製出來的盤面上做出「選了這個目標」之後的完整結果，
@@ -363,24 +397,25 @@ export function banditChooseTarget<T>(
     candidates: T[],
     apply: (clone: SimulationGame, candidate: T) => void,
     budget: number,
+    ladder?: LadderStep[] | null,
 ): T {
     if (candidates.length <= 1) return candidates[0];
 
     const myIdx = game.currentPlayerIndex;
-    const samplesPerArm = Math.max(2, Math.floor(budget / candidates.length));
     const seedBase = Math.floor(rng() * 1e9);
-    const entries = candidates.map(candidate => ({candidate, stats: newStats()}));
+    const rollout = (candidate: T, seed: number) => withRng(makeRng(seed), () => {
+        const clone = game.cloneForRollout();
+        apply(clone, candidate);
+        clone.finishTurnForRollout();
+        return evaluateTurnOutcome(clone, myIdx);
+    });
 
+    if (ladder && ladder.length > 0) return runLadder(candidates, rollout, ladder, seedBase);
+
+    const samplesPerArm = Math.max(2, Math.floor(budget / candidates.length));
+    const entries = candidates.map(candidate => ({candidate, stats: newStats()}));
     for (let j = 0; j < samplesPerArm; j++) {
-        const seed = seedBase + j;
-        for (const entry of entries) {
-            record(entry.stats, withRng(makeRng(seed), () => {
-                const clone = game.cloneForRollout();
-                apply(clone, entry.candidate);
-                clone.finishTurnForRollout();
-                return evaluateTurnOutcome(clone, myIdx);
-            }));
-        }
+        for (const entry of entries) record(entry.stats, rollout(entry.candidate, seedBase + j));
     }
 
     entries.sort((x, y) => compareArms(y.stats, x.stats));
@@ -389,10 +424,10 @@ export function banditChooseTarget<T>(
 
 /*
  * 命運之石可以重擲「任意數量」的骰子，所以候選是骰子索引的所有非空子集合。
- * 6 顆骰有 63 種，超過上限就隨機抽樣 —— 和出牌候選一樣，抽樣會丟掉選項
- * 但不引入偏好。
+ * 骰子最多 6 顆 → 63 種，預設上限就設在這裡，讓它永遠是完整列舉；
+ * 真的超過上限才隨機抽樣 —— 和出牌候選一樣，抽樣會丟掉選項但不引入偏好。
  */
-export function enumerateDiceSubsets(diceCount: number, maxCandidates = 32): number[][] {
+export function enumerateDiceSubsets(diceCount: number, maxCandidates = 63): number[][] {
     const all: number[][] = [];
     for (let mask = 1; mask < (1 << diceCount); mask++) {
         const subset: number[] = [];
