@@ -82,6 +82,12 @@ function parseArgs() {
     } else if (arg === '--b-ladder' && next) {
       opts.banditConfigB = pickLadder(next);
       i++;
+    } else if (arg === '--sim-targets' && next) {
+      opts.banditConfig.simulateTargets = next === 'true';
+      i++;
+    } else if (arg === '--b-sim-targets' && next) {
+      opts.banditConfigB.simulateTargets = next === 'true';
+      i++;
     } else if (arg === '--effect-budget' && next) {
       opts.banditConfig.effectBudget = Number(next);
       i++;

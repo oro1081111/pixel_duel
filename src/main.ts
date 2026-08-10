@@ -1326,6 +1326,9 @@ type AiEngine = {
     SimulationGame: typeof import('./sim/game').SimulationGame;
     banditChoosePlayPlan: typeof import('./sim/bandit').banditChoosePlayPlan;
     banditChooseActivation: typeof import('./sim/bandit').banditChooseActivation;
+    banditChooseTarget: typeof import('./sim/bandit').banditChooseTarget;
+    enumerateDiceSubsets: typeof import('./sim/bandit').enumerateDiceSubsets;
+    targetBudget: number;
 };
 
 let aiEnginePromise: Promise<AiEngine | null> | null = null;
@@ -1337,6 +1340,9 @@ function loadAiEngine(): Promise<AiEngine | null> {
                 SimulationGame: game.SimulationGame,
                 banditChoosePlayPlan: bandit.banditChoosePlayPlan,
                 banditChooseActivation: bandit.banditChooseActivation,
+                banditChooseTarget: bandit.banditChooseTarget,
+                enumerateDiceSubsets: bandit.enumerateDiceSubsets,
+                targetBudget: bandit.DEFAULT_BANDIT_CONFIG.targetBudget,
             }))
             .catch(() => {
                 /*
@@ -2165,9 +2171,28 @@ function getAvailableActivationsForCurrentPlayer() {
     }));
 }
 
+/*
+ * 命運／冰霜／幸運／幻象要在發動後再挑一個目標。
+ * 專家用模擬挑：把每個目標各打一遍到回合結束再比。engine 載不到就退回啟發式。
+ *
+ * apply 必須和真實套用的那段一致 —— 命運與幻象改完盤面要重跑判定，
+ * 少一步模擬出來的就不是同一個遊戲。
+ */
+async function banditPickTarget<T>(
+    candidates: T[],
+    apply: (clone: import('./sim/game').SimulationGame, candidate: T) => void,
+): Promise<T | null> {
+    if (aiLevel !== 'expert' || candidates.length <= 1) return null;
+    const engine = await loadAiEngine();
+    if (!engine) return null;
+    return engine.banditChooseTarget(makeAiSandbox(engine), candidates, apply, engine.targetBudget);
+}
+
 async function aiResolveSelectionModesStep() {
     if (S.luckySelectionMode && S.diceResults.length > 0) {
-        const idx = chooseLowestValueDieIndex();
+        const dice = S.diceResults.map((_, i) => i);
+        const idx = (await banditPickTarget(dice, (clone, i) => { clone.diceResults.splice(i, 1); }))
+            ?? chooseLowestValueDieIndex();
         logAi(`${getAiName()} 移除低價值骰子 #${idx + 1}(${S.diceResults[idx]})`);
         await sleep(randInt(280, 500));
         removeLuckyDie(idx);
@@ -2175,7 +2200,14 @@ async function aiResolveSelectionModesStep() {
     }
 
     if (S.fateSelectionMode && S.diceResults.length > 0) {
-        const chosen = chooseExpertFateDiceIndices();
+        const src = S.fateSourceAreaIdx;
+        const chosen = (await banditPickTarget(
+            (await loadAiEngine())?.enumerateDiceSubsets(S.diceResults.length) ?? [],
+            (clone, subset) => {
+                applyFate(clone.currentPlayerPublic(), src, clone.diceResults, subset);
+                clone.handleJudgingPublic();
+            },
+        )) ?? chooseExpertFateDiceIndices();
         logAi(`${getAiName()} 重擲 ${chosen.length} 顆低價值骰（#${chosen.map(i => i + 1).join(',')}）`);
         await sleep(randInt(280, 500));
         chosen.forEach(i => toggleDiceIndexSelection(i));
@@ -2198,7 +2230,14 @@ async function aiResolveSelectionModesStep() {
     }
 
     if (S.illusionSelectionMode) {
-        const aIdx = chooseExpertIllusionTargetArea();
+        const src = S.illusionSourceAreaIdx;
+        const copyable = getOpponent().activeAreaEffects
+            .map((c, i) => (c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId) ? i : -1))
+            .filter(i => i >= 0);
+        const aIdx = (await banditPickTarget(copyable, (clone, i) => {
+            const card = clone.opponentPublic().activeAreaEffects[i];
+            if (card && applyIllusion(clone.currentPlayerPublic(), src, card)) clone.handleJudgingPublic();
+        })) ?? chooseExpertIllusionTargetArea();
         if (aIdx >= 0) {
             const name = getOpponent().activeAreaEffects[aIdx]?.effectName || '未知';
             logAi(`${getAiName()} 幻象：複製高價值效果「${name}」`);
@@ -2211,7 +2250,11 @@ async function aiResolveSelectionModesStep() {
     }
 
     if (S.frostSelectionMode && S.diceResults.length > 0) {
-        const idx = chooseExpertFrostDieIndex();
+        const src = S.frostSourceAreaIdx;
+        const dice = S.diceResults.map((_, i) => i);
+        const idx = (await banditPickTarget(dice, (clone, i) => {
+            applyFrost(clone.currentPlayerPublic(), src, clone.diceResults, i);
+        })) ?? chooseExpertFrostDieIndex();
         logAi(`${getAiName()} 冰霜：捨棄最適合的骰子 #${idx + 1}(${S.diceResults[idx]})`);
         await sleep(randInt(280, 500));
         targetFrost(idx);

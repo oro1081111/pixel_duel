@@ -193,6 +193,20 @@ export type BanditConfig = {
     playLadder: LadderStep[];
     /** 效果階段每次決策的 rollout 總預算 */
     effectBudget: number;
+    /**
+     * 「選目標」每次決策的 rollout 總預算。
+     *
+     * 命運、冰霜、幸運、幻象這四張需要在發動後再挑一個目標，選錯就白費。
+     * 其餘需要選目標的卡（貫穿、再現、閃光、疾閃）選最大的那次攻擊可以證明最優，
+     * 不需要模擬 —— 傷害是 Σ max(0, 攻擊 − 防禦)，這幾個效果的增益對攻擊值單調遞增，
+     * 所以選最大的在任何防禦值下都同時最優。
+     */
+    targetBudget: number;
+    /**
+     * 命運／冰霜／幸運／幻象的目標要不要用模擬挑（false 則沿用手調啟發式）。
+     * 留成開關是為了能在同一個難度下直接對打比較，不然分不出這件事值不值得。
+     */
+    simulateTargets: boolean;
 };
 
 /*
@@ -214,6 +228,8 @@ export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
         {samples: 16, keep: 1},
     ],
     effectBudget: 100,
+    targetBudget: 60,
+    simulateTargets: true,
 };
 
 /*
@@ -242,6 +258,8 @@ export const GENTLE_BANDIT_CONFIG: BanditConfig = {
         {samples: 32, keep: 1},
     ],
     effectBudget: 100,
+    targetBudget: 60,
+    simulateTargets: true,
 };
 
 /*
@@ -267,6 +285,8 @@ export const HALVING_BANDIT_CONFIG: BanditConfig = {
         {samples: 16, keep: 1},
     ],
     effectBudget: 100,
+    targetBudget: 60,
+    simulateTargets: true,
 };
 
 /*
@@ -287,6 +307,8 @@ export const LEGACY_BANDIT_CONFIG: BanditConfig = {
         {samples: 30, keep: 1},
     ],
     effectBudget: 100,
+    targetBudget: 60,
+    simulateTargets: true,
 };
 
 /*
@@ -323,6 +345,61 @@ function runLadder<T>(
         alive = alive.slice(0, step.keep);
     }
     return alive[0].arm;
+}
+
+/*
+ * 用模擬挑目標。
+ *
+ * 候選很少（骰子最多 6 顆、對手可複製的卡最多 3 張），所以不做淘汰，
+ * 直接把預算平均分給每個候選；同一輪用同一組 seed（Common Random Numbers），
+ * 比的才是「選這個目標」的差異而不是誰運氣好。
+ *
+ * apply 由呼叫端提供：它要在複製出來的盤面上做出「選了這個目標」之後的完整結果，
+ * 必須和真實套用的那段程式一致（例如命運與幻象改完要重跑判定）。
+ * 把它交給呼叫端而不是寫在這裡，是為了讓兩段程式緊鄰、改的時候不容易漏。
+ */
+export function banditChooseTarget<T>(
+    game: SimulationGame,
+    candidates: T[],
+    apply: (clone: SimulationGame, candidate: T) => void,
+    budget: number,
+): T {
+    if (candidates.length <= 1) return candidates[0];
+
+    const myIdx = game.currentPlayerIndex;
+    const samplesPerArm = Math.max(2, Math.floor(budget / candidates.length));
+    const seedBase = Math.floor(rng() * 1e9);
+    const entries = candidates.map(candidate => ({candidate, stats: newStats()}));
+
+    for (let j = 0; j < samplesPerArm; j++) {
+        const seed = seedBase + j;
+        for (const entry of entries) {
+            record(entry.stats, withRng(makeRng(seed), () => {
+                const clone = game.cloneForRollout();
+                apply(clone, entry.candidate);
+                clone.finishTurnForRollout();
+                return evaluateTurnOutcome(clone, myIdx);
+            }));
+        }
+    }
+
+    entries.sort((x, y) => compareArms(y.stats, x.stats));
+    return entries[0].candidate;
+}
+
+/*
+ * 命運之石可以重擲「任意數量」的骰子，所以候選是骰子索引的所有非空子集合。
+ * 6 顆骰有 63 種，超過上限就隨機抽樣 —— 和出牌候選一樣，抽樣會丟掉選項
+ * 但不引入偏好。
+ */
+export function enumerateDiceSubsets(diceCount: number, maxCandidates = 32): number[][] {
+    const all: number[][] = [];
+    for (let mask = 1; mask < (1 << diceCount); mask++) {
+        const subset: number[] = [];
+        for (let i = 0; i < diceCount; i++) if (mask & (1 << i)) subset.push(i);
+        all.push(subset);
+    }
+    return all.length <= maxCandidates ? all : shuffled(all, rng).slice(0, maxCandidates);
 }
 
 // ---------------------------------------------------------------- 出牌階段

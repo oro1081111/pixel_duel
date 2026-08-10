@@ -6,7 +6,7 @@
  * 現在 CLI 的部分留在 runSimulation.ts，這裡只有純邏輯。
  */
 
-import {banditChooseActivation, banditChoosePlayPlan, type BanditConfig, DEFAULT_BANDIT_CONFIG} from './bandit';
+import {banditChooseActivation, banditChoosePlayPlan, banditChooseTarget, enumerateDiceSubsets, type BanditConfig, DEFAULT_BANDIT_CONFIG} from './bandit';
 import {chooseUniform, randInt, rng} from './rng';
 
 import type {CardAttr} from '../cards';
@@ -206,6 +206,20 @@ export class SimulationGame {
   rolloutNoise = false;
 
   /*
+   * 這一份是不是 bandit 用來試打的複製品。
+   * 用來擋住「選目標也用模擬」在 rollout 內部再次觸發 —— 那會遞迴，複雜度指數爆炸。
+   * 複製品一律走啟發式，和效果發動的分工一致。
+   */
+  isRolloutSandbox = false;
+
+  /** 真實對局中的專家：這幾張卡的目標值得用模擬挑 */
+  private banditPicksTargets() {
+    return this.currentAiDifficulty() === 'bandit'
+      && !this.isRolloutSandbox
+      && this.currentBanditConfig().simulateTargets;
+  }
+
+  /*
    * 每個座位各自的 bandit 設定。
    * 兩邊可以不同，才能讓「高預算」與「低預算」直接對打 ——
    * 都拿去打 expert 的話，雙方勝率都逼近天花板，量不出彼此的差距。
@@ -296,6 +310,7 @@ export class SimulationGame {
     clone.skippedPlayBecauseNoHand = this.skippedPlayBecauseNoHand;
     clone.turnCount = this.turnCount;
     clone.rolloutNoise = true;
+    clone.isRolloutSandbox = true;
     return clone;
   }
 
@@ -327,6 +342,19 @@ export class SimulationGame {
 
   playCardPublic(handIdx: number, areaIdx: number) {
     this.playCard(handIdx, areaIdx);
+  }
+
+  handleJudgingPublic() {
+    this.handleJudging();
+  }
+
+  // 給外部（UI）的 apply callback 用：它要在沙盤上重現真實套用的那幾行
+  currentPlayerPublic() {
+    return this.currentPlayer();
+  }
+
+  opponentPublic() {
+    return this.opponent();
   }
 
   availableActivationsPublic() {
@@ -1169,9 +1197,16 @@ export class SimulationGame {
     const finalCount = luckyIdx !== -1 ? count + 1 : count;
     this.diceResults = Array.from({length: finalCount}, () => randInt(1, 6));
     if (luckyIdx !== -1 && this.diceResults.length > 0) {
-      const idx = this.usesExpertHeuristics()
-        ? this.chooseLowestValueDieIndex()
-        : randInt(0, this.diceResults.length - 1);
+      const idx = this.banditPicksTargets()
+        ? banditChooseTarget(
+            this,
+            this.diceResults.map((_, i) => i),
+            (clone, i) => clone.diceResults.splice(i, 1),
+            this.currentBanditConfig().targetBudget,
+          )
+        : this.usesExpertHeuristics()
+          ? this.chooseLowestValueDieIndex()
+          : randInt(0, this.diceResults.length - 1);
       this.diceResults.splice(idx, 1);
     }
   }
@@ -1312,7 +1347,18 @@ export class SimulationGame {
     const p = this.currentPlayer();
     if (p.fateUsedIndices.includes(areaIdx) || this.diceResults.length === 0) return;
     let indices: number[];
-    if (this.usesExpertHeuristics()) {
+    if (this.banditPicksTargets()) {
+      // 重擲哪些骰子交給模擬決定；apply 必須和下面真實套用的兩行一致
+      indices = banditChooseTarget(
+        this,
+        enumerateDiceSubsets(this.diceResults.length),
+        (clone, subset) => {
+          applyFate(clone.currentPlayer(), areaIdx, clone.diceResults, subset, rng);
+          if (clone.currentPhaseIndex === 2) clone.handleJudgingPublic();
+        },
+        this.currentBanditConfig().targetBudget,
+      );
+    } else if (this.usesExpertHeuristics()) {
       indices = this.chooseExpertFateDiceIndices();
     } else {
       const n = this.diceResults.length;
@@ -1328,9 +1374,16 @@ export class SimulationGame {
   private useFrost(areaIdx: number) {
     const p = this.currentPlayer();
     if (p.frostUsedIndices.includes(areaIdx) || this.diceResults.length === 0) return;
-    const dieIdx = this.usesExpertHeuristics()
-      ? this.chooseExpertFrostDieIndex()
-      : randInt(0, this.diceResults.length - 1);
+    const dieIdx = this.banditPicksTargets()
+      ? banditChooseTarget(
+          this,
+          this.diceResults.map((_, i) => i),
+          (clone, i) => applyFrost(clone.currentPlayer(), areaIdx, clone.diceResults, i, rng),
+          this.currentBanditConfig().targetBudget,
+        )
+      : this.usesExpertHeuristics()
+        ? this.chooseExpertFrostDieIndex()
+        : randInt(0, this.diceResults.length - 1);
     applyFrost(p, areaIdx, this.diceResults, dieIdx, rng);
   }
 
@@ -1347,9 +1400,19 @@ export class SimulationGame {
       if (c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId)) candidates.push(idx);
     });
     if (p.magic < 1 || candidates.length === 0) return;
-    const oppAreaIdx = this.usesExpertHeuristics()
-      ? this.chooseExpertIllusionTargetArea()
-      : chooseUniform(candidates);
+    const oppAreaIdx = this.banditPicksTargets()
+      ? banditChooseTarget(
+          this,
+          candidates,
+          (clone, idx) => {
+            const card = clone.opponent().activeAreaEffects[idx];
+            if (card && applyIllusion(clone.currentPlayer(), areaIdx, card)) clone.handleJudgingPublic();
+          },
+          this.currentBanditConfig().targetBudget,
+        )
+      : this.usesExpertHeuristics()
+        ? this.chooseExpertIllusionTargetArea()
+        : chooseUniform(candidates);
     const targetCard = this.opponent().activeAreaEffects[oppAreaIdx];
     if (!targetCard) return;
     if (!applyIllusion(p, areaIdx, targetCard)) return;
