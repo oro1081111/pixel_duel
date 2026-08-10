@@ -1190,6 +1190,7 @@ function buyMarketCard(slotIdx: 0 | 1 | 2) {
     p.hand.push(card);
     S.market[slotIdx] = null;
     addLog(`${p.name} 購買市場牌「${card.effectName}」(-${price} 金)`);
+    updateBuyPhaseHint();
     render();
 }
 
@@ -1210,6 +1211,7 @@ function buyFromDeck() {
     S.buyDeckDrawCount = nextDrawIndex;
 
     addLog(`${p.name} 從牌庫抽牌「${card.effectName}」(-${cost} 金, 第 ${nextDrawIndex} 張)`);
+    updateBuyPhaseHint();
     render();
 }
 
@@ -2572,14 +2574,29 @@ function getOpponent() {
 // 同樣會讓 nextPhase() 直接返回 —— 按鈕看起來能按卻沒反應。
 // 這裡把原因集中起來：按鈕依此變灰，中央提示也直接說明原因，
 // 使用者不必先按一下才知道被擋。
+/*
+ * 中央提示要顯示什麼。手機與桌機共用 —— 這幾句話原本兩邊各寫一份，
+ * 改字時只改一邊就會兩處說法不同。
+ *
+ * 優先序（後面的蓋前面的）：階段提示 < 按鈕被擋的原因 < 選取模式 < 勝負。
+ * blockReason 由呼叫端決定要不要帶：桌機目前沒有把它接上去。
+ */
+function getDisplayPhaseHint(blockReason: string | null): string {
+    if (S.winner) return `${S.winner}勝利`;
+    if (S.illusionSelectionMode) return '幻象幽影：複製對手效果';
+    if (S.luckySelectionMode) return '幸運之石：移除1骰';
+    return blockReason || S.phaseHint;
+}
+
 function getActionBlockReason(): string | null {
     // 準備階段的「開始」有自己的啟用條件（後手出滿 1 張），
     // 這裡不要插手，否則會顯示錯的原因。
     if (S.inPreparationPhase) return null;
-    if (S.luckySelectionMode) return '先處理幸運骰';
+    if (S.luckySelectionMode) return '幸運之石：移除1骰';
     const p = getCurrentPlayer();
     if (S.currentPhaseIndex === 0 && p.hand.length > 0 && p.cardsPlayedThisTurn === 0) return '至少出 1 張';
-    if (S.currentPhaseIndex === 6 && S.deck.length > 0 && S.buyDeckDrawCount < 1) return '先抽免費牌';
+    // 和購買階段的提示用同一句，否則短的那句會蓋掉長的，變成兩種說法
+    if (S.currentPhaseIndex === 6 && S.deck.length > 0 && S.buyDeckDrawCount < 1) return '先抽免費牌，再買';
     return null;
 }
 
@@ -2622,7 +2639,7 @@ function nextPhase() {
           return;
       }
       S.currentPhaseIndex = 2;
-      S.phaseHint = '判定中';
+      S.phaseHint = '數值判定中';
       handleJudging();
   } else if (S.currentPhaseIndex === 2) { // Judging
       S.currentPhaseIndex = 3;
@@ -2649,7 +2666,7 @@ function nextPhase() {
       p.attackQueue = p.currentAttacks.map(h => [...h]);
       p.piercingQueue = p.piercingAttacks.map(h => [...h]);
       S.currentPhaseIndex = 6;
-      S.phaseHint = '購買階段';
+      // 提示由 handleBuyPhase 依牌庫狀態決定，這裡不要先寫一個馬上被蓋掉的值
       handleBuyPhase();
   } else if (S.currentPhaseIndex === 6) { // Buy
       // 必須先從牌庫抽第 1 張 (0 金)
@@ -2672,7 +2689,7 @@ function nextPhase() {
       S.currentPhaseIndex = 0;
       S.phaseHint = S.players[S.currentPlayerIndex].hand.length === 0
           ? '沒有手牌，直接進行擲骰'
-          : '選牌打出';
+          : '選牌出牌';
       S.diceResults = [];
       S.skippedPlayBecauseNoHand = false;
       // Mobile：進入出牌階段時手牌抽屜自動彈出
@@ -2946,8 +2963,8 @@ function useAmplify(areaIdx) {
         }
         // No attacks => cannot meaningfully trigger.
         if (!hasAnyAttackTarget(p)) {
-            S.phaseHint = '沒有可強化的攻擊';
-            render();
+            // 和其他「不能這樣做」一致用浮動訊息；寫進階段提示會一直留著蓋住當下階段
+            showToast('沒有可強化的攻擊');
             return;
         }
         applyAmplify(p, areaIdx);
@@ -3000,8 +3017,7 @@ function useFlare(areaIdx) {
         }
         // No attacks => there is no selectable target badge, so don't enter selection mode.
         if (!hasAnyAttackTarget(p)) {
-            S.phaseHint = '沒有可翻倍的攻擊';
-            render();
+            showToast('沒有可翻倍的攻擊');
             return;
         }
         if (p.magic >= 3) {
@@ -3343,16 +3359,27 @@ function confirmFate() {
     render();
 }
 
+/*
+ * 購買階段的提示會隨著「有沒有抽掉免費牌」改變，所以每次動作後都要重算，
+ * 不能只在進入階段時設一次 —— 抽完免費牌還一直寫著「先抽免費牌」會誤導。
+ */
+function updateBuyPhaseHint() {
+    if (S.deck.length === 0) {
+        S.phaseHint = '牌庫已空：跳過購買/購買市場牌';
+    } else if (S.buyDeckDrawCount < 1) {
+        S.phaseHint = '先抽免費牌，再買';
+    } else {
+        S.phaseHint = '可繼續購買或結束';
+    }
+}
+
 function handleBuyPhase() {
-    const p = getCurrentPlayer();
     addLog('--- 購買階段 ---');
     S.buyDeckDrawCount = 0;
     // Mobile UX：購買階段預設顯示市場（在底部 dock）
     mobileDockTab = 'market';
     handDrawerOpen = true;
-    S.phaseHint = S.deck.length === 0
-        ? '牌庫空：可結束/買市'
-        : '先抽免費牌，再買';
+    updateBuyPhaseHint();
     render();
 }
 
@@ -3747,11 +3774,7 @@ function renderMobileActionBar() {
     const bar = document.createElement('div');
     bar.className = 'shrink-0 flex items-center gap-2 px-3 py-1.5 bg-[#eceae5] border-t-[3px] border-[#603b2d]';
 
-    let displayPhaseHint = getActionBlockReason() || S.phaseHint;
-    if (S.luckySelectionMode) displayPhaseHint = '幸運：移除1骰';
-    if (S.illusionSelectionMode) displayPhaseHint = '幻象：選對手卡';
-    // 分出勝負後不要停在「受傷 N」這種階段中的提示
-    if (S.winner) displayPhaseHint = `${S.winner}勝利`;
+    const displayPhaseHint = getDisplayPhaseHint(getActionBlockReason());
 
     const step = document.createElement('div');
     step.className = 'shrink-0 px-2 py-1 rounded-none bg-[#dcdad3] border-2 border-[#603b2d] text-[11px] font-black text-[#2a2420] tracking-wider whitespace-nowrap';
@@ -4647,13 +4670,7 @@ function render() {
     const phaseSection = document.createElement('div');
     phaseSection.className = 'absolute left-[42%] -translate-x-1/2 flex items-center justify-center';
     
-    let displayPhaseHint = S.winner ? `${S.winner}勝利` : S.phaseHint;
-    if (S.luckySelectionMode) {
-        displayPhaseHint = '幸運：移除1骰';
-    }
-    if (S.illusionSelectionMode) {
-        displayPhaseHint = '幻象：選對手卡';
-    }
+    const displayPhaseHint = getDisplayPhaseHint(null);
 
     const phaseName = S.inPreparationPhase ? '準備階段' : PHASE_NAMES[S.currentPhaseIndex];
 
