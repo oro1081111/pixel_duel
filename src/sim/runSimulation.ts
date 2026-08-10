@@ -8,7 +8,7 @@ import {
   type OpeningMode,
   SimulationGame,
 } from './game';
-import {type BanditConfig, DEFAULT_BANDIT_CONFIG, FATE_TARGET_LADDER, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
+import {type BanditConfig, DEFAULT_BANDIT_CONFIG, FATE_TARGET_LADDER, FATE_TARGET_LADDER_LEAN, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
 
 // 給 --ladder / --b-ladder 用的階梯預設值，方便兩種形狀直接對打
 const LADDER_PRESETS: Record<string, BanditConfig> = {
@@ -22,6 +22,14 @@ function pickLadder(name: string): BanditConfig {
   const preset = LADDER_PRESETS[name];
   if (!preset) throw new Error(`--ladder must be one of: ${Object.keys(LADDER_PRESETS).join(', ')}`);
   return {...preset, playLadder: preset.playLadder.map(x => ({...x}))};
+}
+
+/* on = 目前的階梯｜lean = 4 倍之前的階梯｜off = 平均分掉 targetBudget */
+function pickFateLadder(name: string) {
+  if (name === 'on') return FATE_TARGET_LADDER;
+  if (name === 'lean') return FATE_TARGET_LADDER_LEAN;
+  if (name === 'off') return null;
+  throw new Error('--fate-ladder must be one of: on, lean, off');
 }
 
 type MatchupMode = 'custom' | 'expert-mirror' | 'expert-normal' | 'bandit-expert' | 'bandit-tune';
@@ -89,11 +97,10 @@ function parseArgs() {
       opts.banditConfigB.simulateTargets = next === 'true';
       i++;
     } else if (arg === '--fate-ladder' && next) {
-      // on = 專用淘汰階梯；off = 和其他三張一樣平均分 targetBudget
-      opts.banditConfig.fateLadder = next === 'on' ? FATE_TARGET_LADDER : null;
+      opts.banditConfig.fateLadder = pickFateLadder(next);
       i++;
     } else if (arg === '--b-fate-ladder' && next) {
-      opts.banditConfigB.fateLadder = next === 'on' ? FATE_TARGET_LADDER : null;
+      opts.banditConfigB.fateLadder = pickFateLadder(next);
       i++;
     } else if (arg === '--effect-budget' && next) {
       opts.banditConfig.effectBudget = Number(next);
