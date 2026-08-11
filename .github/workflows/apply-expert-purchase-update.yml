@@ -1,0 +1,455 @@
+name: Apply expert purchase strategy update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-expert-purchase-update.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply purchase strategy
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          purchase = r'''import type {GameCard} from '../engine/state';
+
+/**
+ * 專家購牌 V1 的固定卡牌權重。
+ *
+ * 來源：實驗專家自我對局 5000 場的「勝局出牌率」；
+ * 勝局出牌率 = 最後勝利的玩家有有效出這張牌的局數 / 5000。
+ *
+ * 這裡刻意只保留一個固定權重，不加入血量、幻境、combo 等局面修正。
+ */
+export const WINNING_PLAY_RATE_WEIGHTS: Readonly<Record<string, number>> = {
+    barrier: 0.2028,
+    charge: 0.2400,
+    amplify: 0.3078,
+    magic_bullet: 0.1698,
+    ambush: 0.2214,
+    fate: 0.2766,
+    dodge: 0.2032,
+    diversion: 0.2566,
+    reproduction: 0.2070,
+    gale: 0.2444,
+    shadow: 0.2296,
+    flare: 0.1268,
+    thrust: 0.2826,
+    shield: 0.1552,
+    backfire: 0.3580,
+    flame_shield: 0.1182,
+    brilliance: 0.1626,
+    forest: 0.1010,
+    frost: 0.1236,
+    holy_light: 0.1966,
+    soul_snatch: 0.2808,
+    contract: 0.2020,
+    surge: 0.1810,
+    breakthrough: 0.3020,
+    mirage: 0.3920,
+    lucky: 0.2804,
+    magic_luck: 0.2272,
+    illusion: 0.1406,
+};
+
+export type WinningPlayPurchasePlan = {
+    deckDraws: number;
+    marketSlots: Array<0 | 1 | 2>;
+    score: number;
+    cards: number;
+    cost: number;
+};
+
+export function getWinningPlayWeight(card: Pick<GameCard, 'effectId'> | null | undefined) {
+    if (!card) return 0;
+    return WINNING_PLAY_RATE_WEIGHTS[card.effectId] ?? 0;
+}
+
+export function averageWinningPlayWeight(cards: ReadonlyArray<GameCard>) {
+    if (cards.length === 0) return 0;
+    return cards.reduce((sum, card) => sum + getWinningPlayWeight(card), 0) / cards.length;
+}
+
+/**
+ * 枚舉目前金幣能完成的所有購買方案，選「勝局出牌率總和」最高者。
+ * 同分時優先拿更多牌；仍同分則均勻隨機。
+ *
+ * deckAverageOverride 給 rollout 使用：rollout 不得因模擬盲抽到哪張牌而改變
+ * 後續判斷，所以可以在盲抽前凍結牌庫平均值，整個購買階段都沿用它。
+ */
+export function chooseWinningPlayPurchasePlan(args: {
+    gold: number;
+    buyDeckDrawCount: number;
+    deck: ReadonlyArray<GameCard>;
+    market: ReadonlyArray<GameCard | null>;
+    deckDrawCost: (drawIndex: number) => number;
+    marketPrice: (slotIdx: 0 | 1 | 2) => number;
+    random?: () => number;
+    deckAverageOverride?: number;
+}): WinningPlayPurchasePlan | null {
+    const {
+        gold,
+        buyDeckDrawCount,
+        deck,
+        market,
+        deckDrawCost,
+        marketPrice,
+        random = Math.random,
+        deckAverageOverride,
+    } = args;
+
+    const deckAverage = deckAverageOverride ?? averageWinningPlayWeight(deck);
+    const availableSlots = ([0, 1, 2] as const).filter(slot => market[slot] != null);
+    const plans: WinningPlayPurchasePlan[] = [];
+
+    // 市場最多 3 張，直接枚舉所有子集合。
+    for (let mask = 0; mask < (1 << availableSlots.length); mask++) {
+        const marketSlots: Array<0 | 1 | 2> = [];
+        let marketCost = 0;
+        let marketScore = 0;
+
+        for (let j = 0; j < availableSlots.length; j++) {
+            if ((mask & (1 << j)) === 0) continue;
+            const slot = availableSlots[j];
+            const card = market[slot];
+            if (!card) continue;
+            marketSlots.push(slot);
+            marketCost += marketPrice(slot);
+            marketScore += getWinningPlayWeight(card);
+        }
+
+        // 再枚舉能追加的盲抽張數；抽牌成本依第幾張依序累加。
+        let deckCost = 0;
+        for (let deckDraws = 0; deckDraws <= deck.length; deckDraws++) {
+            if (deckDraws > 0) {
+                const cost = deckDrawCost(buyDeckDrawCount + deckDraws);
+                if (!Number.isFinite(cost)) break;
+                deckCost += cost;
+            }
+
+            const totalCost = marketCost + deckCost;
+            const cards = marketSlots.length + deckDraws;
+            if (cards === 0 || totalCost > gold) continue;
+
+            plans.push({
+                deckDraws,
+                marketSlots: [...marketSlots],
+                score: marketScore + deckDraws * deckAverage,
+                cards,
+                cost: totalCost,
+            });
+        }
+    }
+
+    if (plans.length === 0) return null;
+
+    const bestScore = Math.max(...plans.map(plan => plan.score));
+    let best = plans.filter(plan => Math.abs(plan.score - bestScore) < 1e-12);
+
+    const mostCards = Math.max(...best.map(plan => plan.cards));
+    best = best.filter(plan => plan.cards === mostCards);
+
+    const idx = Math.min(best.length - 1, Math.floor(random() * best.length));
+    return best[idx];
+}
+'''
+
+          purchase_path = Path('src/ai/purchase.ts')
+          purchase_path.parent.mkdir(parents=True, exist_ok=True)
+          purchase_path.write_text(purchase, encoding='utf-8')
+
+          # --- simulator / rollout ---
+          game_path = Path('src/sim/game.ts')
+          game = game_path.read_text(encoding='utf-8')
+
+          import_anchor = "import {getBaseAttrForDie} from '../basebars';"
+          purchase_import = "import {averageWinningPlayWeight, chooseWinningPlayPurchasePlan, getWinningPlayWeight} from '../ai/purchase';"
+          if purchase_import not in game:
+              assert import_anchor in game, 'game.ts import anchor not found'
+              game = game.replace(import_anchor, import_anchor + '\n' + purchase_import, 1)
+
+          game = game.replace(
+              ' * 它只接管「出牌」與「效果發動」兩個決策點；其餘階段沿用 expert 的啟發式，',
+              ' * 它接管「出牌」「效果發動」與「購買」決策；其餘階段沿用 expert 的啟發式，',
+              1,
+          )
+
+          game_purchase = r'''  private aiBuyPhase() {
+    // 專家（bandit）使用勝局出牌率的完整購買方案；高手／一般維持原本邏輯。
+    if (this.currentAiDifficulty() === 'bandit') {
+      this.aiBuyPhaseWinningPlay();
+      return;
+    }
+
+    this.currentPhaseIndex = 6;
+    if (this.deck.length > 0 && this.buyDeckDrawCount < 1) {
+      this.buyFromDeck();
+    }
+
+    for (let i = 0; i < 20; i++) {
+      const p = this.currentPlayer();
+      const actions: Array<{score: number; run: () => void}> = [];
+      const nextDrawIndex = this.buyDeckDrawCount + 1;
+      const nextDrawCost = this.deckDrawCost(nextDrawIndex);
+      if (this.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
+        actions.push({
+          score: this.usesExpertHeuristics() ? 5.8 - nextDrawCost * 1.1 + rng() * 0.1 : rng(),
+          run: () => this.buyFromDeck(),
+        });
+      }
+      ([0, 1, 2] as const).forEach(idx => {
+        const c = this.market[idx];
+        const price = this.marketPrice(idx);
+        if (c && p.gold >= price) {
+          actions.push({
+            score: this.usesExpertHeuristics()
+              ? this.scoreCardForExpert(c) - price * 1.35 + rng() * 0.1
+              : rng(),
+            run: () => this.buyMarketCard(idx),
+          });
+        }
+      });
+      if (actions.length === 0) return;
+      if (this.usesExpertHeuristics()) {
+        this.pickScored(actions).run();
+      } else {
+        chooseUniform(actions).run();
+      }
+    }
+  }
+
+  private aiBuyPhaseWinningPlay() {
+    this.currentPhaseIndex = 6;
+
+    // Rollout 不能知道任何盲抽的實際身分（包含免費抽牌）。
+    // 因此在抽免費牌之前凍結平均值，整個 rollout 購買階段只使用這個期望值。
+    const rolloutDeckAverage = this.isRolloutSandbox
+      ? averageWinningPlayWeight(this.deck)
+      : undefined;
+
+    // 第 1 張牌庫牌永遠免費且必抽。
+    if (this.deck.length > 0 && this.buyDeckDrawCount < 1) {
+      this.buyFromDeck();
+    }
+
+    const choosePlan = () => chooseWinningPlayPurchasePlan({
+      gold: this.currentPlayer().gold,
+      buyDeckDrawCount: this.buyDeckDrawCount,
+      deck: this.deck,
+      market: this.market,
+      deckDrawCost: drawIndex => this.deckDrawCost(drawIndex),
+      marketPrice: slotIdx => this.marketPrice(slotIdx),
+      random: rng,
+      deckAverageOverride: rolloutDeckAverage,
+    });
+
+    // Rollout：只依盲抽前可知資訊規劃一次，之後整套執行到底。
+    // 模擬中真正抽到哪張牌，不得觸發重新評估。
+    if (this.isRolloutSandbox) {
+      const plan = choosePlan();
+      if (!plan) return;
+      for (let i = 0; i < plan.deckDraws; i++) this.buyFromDeck();
+      for (const slot of plan.marketSlots) {
+        if (this.market[slot]) this.buyMarketCard(slot);
+      }
+      return;
+    }
+
+    // 真實專家：每完成一次購買都重新規劃。
+    // 尤其盲抽後已經知道抽到什麼，因此剩餘牌庫平均值會隨之更新。
+    for (let step = 0; step < 20; step++) {
+      const plan = choosePlan();
+      if (!plan) return;
+
+      // 若最佳方案包含盲抽，先抽 1 張；看到結果後下一輪重新評估。
+      if (plan.deckDraws > 0) {
+        this.buyFromDeck();
+        continue;
+      }
+
+      // 沒有盲抽時，從最佳方案中先買權重最高的公開市場牌，再重新評估。
+      const availableSlots = plan.marketSlots.filter(slot => this.market[slot] != null);
+      if (availableSlots.length === 0) return;
+      const maxWeight = Math.max(...availableSlots.map(slot => getWinningPlayWeight(this.market[slot])));
+      const bestSlots = availableSlots.filter(
+        slot => Math.abs(getWinningPlayWeight(this.market[slot]) - maxWeight) < 1e-12,
+      );
+      this.buyMarketCard(chooseUniform(bestSlots));
+    }
+  }'''
+
+          game_pattern = re.compile(
+              r"  private aiBuyPhase\(\) \{.*?\n  \}\n\n  private buyFromDeck\(\) \{",
+              re.S,
+          )
+          game, count = game_pattern.subn(game_purchase + "\n\n  private buyFromDeck() {", game, count=1)
+          assert count == 1, f'game.ts purchase block replacement count={count}'
+          game_path.write_text(game, encoding='utf-8')
+
+          # --- actual browser UI ---
+          main_path = Path('src/main.ts')
+          main = main_path.read_text(encoding='utf-8')
+
+          main_anchor = "import {getBaseAttrForDie, getBaseBarImg} from './basebars';"
+          main_import = "import {chooseWinningPlayPurchasePlan, getWinningPlayWeight} from './ai/purchase';"
+          if main_import not in main:
+              assert main_anchor in main, 'main.ts import anchor not found'
+              main = main.replace(main_anchor, main_anchor + '\n' + main_import, 1)
+
+          main = main.replace(
+              ' * 兩者共用同一套規則與同一個回合流程，差別只在「出牌」與「效果發動」怎麼決定。',
+              ' * 兩者共用同一套規則與同一個回合流程；專家另外使用勝局出牌率規劃購買。',
+              1,
+          )
+
+          main_purchase = r'''async function aiDoBuyPhase() {
+    if (S.currentPhaseIndex !== 6) return;
+    const p = getCurrentPlayer();
+
+    // 第 1 張牌庫牌永遠免費且必抽。
+    if (S.deck.length > 0 && S.buyDeckDrawCount < 1) {
+        logAi(`${getAiName()} 購買：先抽免費牌`);
+        await sleep(randInt(240, 420));
+        buyFromDeck();
+        return;
+    }
+
+    if (aiLevel === 'expert') {
+        const plan = chooseWinningPlayPurchasePlan({
+            gold: p.gold,
+            buyDeckDrawCount: S.buyDeckDrawCount,
+            deck: S.deck,
+            market: S.market,
+            deckDrawCost: getDeckDrawCost,
+            marketPrice: getMarketPrice,
+            random: Math.random,
+        });
+
+        if (!plan) {
+            logAi(`${getAiName()} 購買：沒有可買選項，結束購買`);
+            await sleep(randInt(240, 420));
+            nextPhase();
+            return;
+        }
+
+        // 最佳方案含盲抽時先執行 1 次盲抽；實際看到牌後，下一輪重新規劃。
+        if (plan.deckDraws > 0) {
+            const nextDrawCost = getDeckDrawCost(S.buyDeckDrawCount + 1);
+            logAi(`${getAiName()} 購買：方案優先抽牌庫(-${nextDrawCost}金)`);
+            await sleep(randInt(280, 500));
+            buyFromDeck();
+            return;
+        }
+
+        // 純市場方案：先買方案中勝局出牌率最高的牌，再重新規劃剩餘金幣。
+        const availableSlots = plan.marketSlots.filter(slot => S.market[slot] != null);
+        if (availableSlots.length === 0) {
+            await sleep(randInt(180, 300));
+            nextPhase();
+            return;
+        }
+        const maxWeight = Math.max(...availableSlots.map(slot => getWinningPlayWeight(S.market[slot])));
+        const bestSlots = availableSlots.filter(
+            slot => Math.abs(getWinningPlayWeight(S.market[slot]) - maxWeight) < 1e-12,
+        );
+        const slot = chooseUniform(bestSlots);
+        const card = S.market[slot];
+        const price = getMarketPrice(slot);
+        logAi(`${getAiName()} 購買：規劃買市場(價格${price})「${card?.effectName ?? '未知'}」`);
+        await sleep(randInt(280, 500));
+        buyMarketCard(slot);
+        return;
+    }
+
+    // 高手維持既有啟發式購買策略。
+    const actions: Array<{label: string; score: number; run: () => void}> = [];
+    const nextDrawIndex = S.buyDeckDrawCount + 1;
+    const nextDrawCost = getDeckDrawCost(nextDrawIndex);
+    if (S.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
+        actions.push({
+            label: `抽牌庫(-${nextDrawCost}金)`,
+            score: 5.8 - nextDrawCost * 1.1 + Math.random() * 0.1,
+            run: () => buyFromDeck(),
+        });
+    }
+
+    ([0, 1, 2] as const).forEach((idx) => {
+        const c = S.market[idx];
+        if (!c) return;
+        const price = getMarketPrice(idx);
+        if (p.gold < price) return;
+        actions.push({
+            label: `買市場(價格${price})「${c.effectName}」`,
+            score: scoreCardForExpert(c) - price * 1.35 + Math.random() * 0.1,
+            run: () => buyMarketCard(idx),
+        });
+    });
+
+    if (actions.length === 0) {
+        logAi(`${getAiName()} 購買：沒有可買選項，結束購買`);
+        await sleep(randInt(240, 420));
+        nextPhase();
+        return;
+    }
+
+    const maxScore = Math.max(...actions.map(a => a.score));
+    const chosen = chooseUniform(actions.filter(a => a.score === maxScore));
+    logAi(`${getAiName()} 購買：${chosen.label}`);
+    await sleep(randInt(280, 500));
+    chosen.run();
+}'''
+
+          main_pattern = re.compile(
+              r"async function aiDoBuyPhase\(\) \{.*?\n\}\n\nasync function runComputerTurnLoop\(\)",
+              re.S,
+          )
+          main, count = main_pattern.subn(main_purchase + "\n\nasync function runComputerTurnLoop()", main, count=1)
+          assert count == 1, f'main.ts purchase block replacement count={count}'
+          main_path.write_text(main, encoding='utf-8')
+
+          assert "aiLevel === 'expert'" in main
+          assert 'chooseWinningPlayPurchasePlan' in main
+          assert "currentAiDifficulty() === 'bandit'" in game
+          assert 'rolloutDeckAverage' in game
+          assert 'deckAverageOverride: rolloutDeckAverage' in game
+          print('purchase strategy patch applied')
+          PY
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit verified update
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-expert-purchase-update.yml
+          git add src/ai/purchase.ts src/main.ts src/sim/game.ts
+          git commit -m "Use winning-play purchase strategy for expert AI"
+          git push origin HEAD:main
