@@ -37,6 +37,8 @@ export type TurnOutcome = {
     won: boolean;
     /** 我在這回合的傷害階段死了 */
     died: boolean;
+    /** 回合結束時對手剩餘生命 */
+    oppHp: number;
     myHp: number;
     /** 對各種假設防禦值加權後的期望輸出傷害 */
     offense: number;
@@ -63,6 +65,7 @@ export function evaluateTurnOutcome(game: SimulationGame, myIdx: 0 | 1): TurnOut
     return {
         won: opp.hp <= 0,
         died: me.hp <= 0,
+        oppHp: opp.hp,
         myHp: me.hp,
         offense,
         // 卡片數是購買成果的粗略代理。卡片「品質」暫時不計 —— 這是最低優先層，
@@ -77,19 +80,21 @@ type ArmStats = {
     n: number;
     wins: number;
     deaths: number;
+    oppHp: number[];
     hp: number[];
     offense: number[];
     economy: number[];
 };
 
 function newStats(): ArmStats {
-    return {n: 0, wins: 0, deaths: 0, hp: [], offense: [], economy: []};
+    return {n: 0, wins: 0, deaths: 0, oppHp: [], hp: [], offense: [], economy: []};
 }
 
 function record(stats: ArmStats, o: TurnOutcome) {
     stats.n++;
     if (o.won) stats.wins++;
     if (o.died) stats.deaths++;
+    stats.oppHp.push(o.oppHp);
     stats.hp.push(o.myHp);
     stats.offense.push(o.offense);
     stats.economy.push(o.economy);
@@ -152,15 +157,19 @@ function compareArms(a: ArmStats, b: ArmStats): number {
     );
     if (deathCmp !== 0) return deathCmp;
 
-    // 2. 少受傷（剩餘生命越高越好）
+    // 2. 壓低對手生命（剩餘生命越低越好）
+    const oppHpCmp = decide(mean(a.oppHp), mean(b.oppHp), stderr(a.oppHp), stderr(b.oppHp), false);
+    if (oppHpCmp !== 0) return oppHpCmp;
+
+    // 3. 少受傷（自己剩餘生命越高越好）
     const hpCmp = decide(mean(a.hp), mean(b.hp), stderr(a.hp), stderr(b.hp), true);
     if (hpCmp !== 0) return hpCmp;
 
-    // 3. 給對手最多傷害
+    // 4. 給對手最多傷害
     const offCmp = decide(mean(a.offense), mean(b.offense), stderr(a.offense), stderr(b.offense), true);
     if (offCmp !== 0) return offCmp;
 
-    // 4. 卡片收益（最低優先，純平手判定）
+    // 5. 卡片收益（最低優先，純平手判定）
     return decide(mean(a.economy), mean(b.economy), stderr(a.economy), stderr(b.economy), true);
 }
 
