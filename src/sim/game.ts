@@ -1214,6 +1214,8 @@ export class SimulationGame {
             this.diceResults.map((_, i) => i),
             (clone, i) => clone.diceResults.splice(i, 1),
             this.currentBanditConfig().targetBudget,
+            null,
+            this.currentBanditConfig().scoreOppHp,
           )
         : this.usesExpertHeuristics()
           ? this.chooseLowestValueDieIndex()
@@ -1369,6 +1371,7 @@ export class SimulationGame {
         },
         this.currentBanditConfig().targetBudget,
         this.currentBanditConfig().fateLadder,
+        this.currentBanditConfig().scoreOppHp,
       );
     } else if (this.usesExpertHeuristics()) {
       indices = this.chooseExpertFateDiceIndices();
@@ -1392,6 +1395,8 @@ export class SimulationGame {
           this.diceResults.map((_, i) => i),
           (clone, i) => applyFrost(clone.currentPlayer(), areaIdx, clone.diceResults, i, rng),
           this.currentBanditConfig().targetBudget,
+          null,
+          this.currentBanditConfig().scoreOppHp,
         )
       : this.usesExpertHeuristics()
         ? this.chooseExpertFrostDieIndex()
@@ -1421,6 +1426,8 @@ export class SimulationGame {
             if (card && applyIllusion(clone.currentPlayer(), areaIdx, card)) clone.handleJudgingPublic();
           },
           this.currentBanditConfig().targetBudget,
+          null,
+          this.currentBanditConfig().scoreOppHp,
         )
       : this.usesExpertHeuristics()
         ? this.chooseExpertIllusionTargetArea()

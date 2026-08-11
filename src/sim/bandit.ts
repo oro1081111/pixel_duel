@@ -277,6 +277,12 @@ export type BanditConfig = {
      * 不再疊手調數字。高手（expert 啟發式）不受影響，仍用權重表。
      */
     simpleBuy: boolean;
+    /**
+     * 比較時要不要納入「對手剩餘生命」那一層。
+     * 留成開關是為了能兩組設定同局對打 —— 拿兩邊各自去打高手是量不出差距的，
+     * 都已經七成多、逼近天花板。
+     */
+    scoreOppHp: boolean;
 };
 
 /*
@@ -339,6 +345,7 @@ export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
     simpleBuy: true,
+    scoreOppHp: true,
 };
 
 /*
@@ -371,6 +378,7 @@ export const GENTLE_BANDIT_CONFIG: BanditConfig = {
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
     simpleBuy: true,
+    scoreOppHp: true,
 };
 
 /*
@@ -400,6 +408,7 @@ export const HALVING_BANDIT_CONFIG: BanditConfig = {
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
     simpleBuy: true,
+    scoreOppHp: true,
 };
 
 /*
@@ -424,6 +433,7 @@ export const LEGACY_BANDIT_CONFIG: BanditConfig = {
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
     simpleBuy: true,
+    scoreOppHp: true,
 };
 
 /*
@@ -484,8 +494,10 @@ export function banditChooseTarget<T>(
     apply: (clone: SimulationGame, candidate: T) => void,
     budget: number,
     ladder?: LadderStep[] | null,
+    scoreOppHp = true,
 ): T {
     if (candidates.length <= 1) return candidates[0];
+    setCompareUsesOppHp(scoreOppHp);
 
     const myIdx = game.currentPlayerIndex;
     const seedBase = Math.floor(rng() * 1e9);
@@ -588,6 +600,7 @@ export function banditChoosePlayPlan(
     game: SimulationGame,
     cfg: BanditConfig = DEFAULT_BANDIT_CONFIG,
 ): PlayStep[] | null {
+    setCompareUsesOppHp(cfg.scoreOppHp);
     const myIdx = game.currentPlayerIndex;
     const hand = game.players[myIdx].hand;
     if (hand.length === 0) return null;
@@ -628,6 +641,7 @@ export function banditChooseActivation(
     phase: number,
     cfg: BanditConfig = DEFAULT_BANDIT_CONFIG,
 ): ActivationChoice {
+    setCompareUsesOppHp(cfg.scoreOppHp);
     const myIdx = game.currentPlayerIndex;
     const options = game.availableActivationsPublic();
     if (options.length === 0) return 'STOP';
