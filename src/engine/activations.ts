@@ -55,6 +55,7 @@ const RULES: Record<string, Rule> = {
     },
     frost: {
         phases: [1], magicCost: 0, usedField: 'frostUsedIndices', blockedByMirage: false,
+        extra: ctx => ctx.diceCount > 0,
     },
     magic_luck: {
         phases: [2], magicCost: 2, usedField: 'magicLuckUsedIndices', blockedByMirage: true,
