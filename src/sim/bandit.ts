@@ -40,6 +40,8 @@ export type TurnOutcome = {
     myHp: number;
     /** 對各種假設防禦值加權後的期望輸出傷害 */
     offense: number;
+    /** 對手剩餘生命。回合結束時的實際值，不是估計 */
+    oppHp: number;
     /** 手牌與場上卡片總數，購買階段的成果 */
     economy: number;
 };
@@ -64,6 +66,7 @@ export function evaluateTurnOutcome(game: SimulationGame, myIdx: 0 | 1): TurnOut
         won: opp.hp <= 0,
         died: me.hp <= 0,
         myHp: me.hp,
+        oppHp: opp.hp,
         offense,
         // 卡片數是購買成果的粗略代理。卡片「品質」暫時不計 —— 這是最低優先層，
         // 只在前面幾層都打平時才會用到。
@@ -78,12 +81,13 @@ type ArmStats = {
     wins: number;
     deaths: number;
     hp: number[];
+    oppHp: number[];
     offense: number[];
     economy: number[];
 };
 
 function newStats(): ArmStats {
-    return {n: 0, wins: 0, deaths: 0, hp: [], offense: [], economy: []};
+    return {n: 0, wins: 0, deaths: 0, hp: [], oppHp: [], offense: [], economy: []};
 }
 
 function record(stats: ArmStats, o: TurnOutcome) {
@@ -91,6 +95,7 @@ function record(stats: ArmStats, o: TurnOutcome) {
     if (o.won) stats.wins++;
     if (o.died) stats.deaths++;
     stats.hp.push(o.myHp);
+    stats.oppHp.push(o.oppHp);
     stats.offense.push(o.offense);
     stats.economy.push(o.economy);
 }
@@ -128,6 +133,20 @@ function proportionStderr(k: number, n: number) {
  *
  * 回傳 > 0 表示 a 比較好。
  */
+/*
+ * 「對手剩餘生命」那一層要不要納入比較。
+ *
+ * 用可切換的模組層旗標而不是把 config 穿過 compareArms 的每個呼叫端：
+ * 和 sim/rng.ts 的 RNG 來源是同一個取捨 —— rollout 是同步執行、
+ * 一次決策只屬於一個座位，不會有交錯。每個 bandit 進入點開頭設定一次。
+ * 留成開關純粹是為了能兩組設定直接對打，量出這一層值不值得。
+ */
+let compareUsesOppHp = true;
+
+export function setCompareUsesOppHp(on: boolean) {
+    compareUsesOppHp = on;
+}
+
 function compareArms(a: ArmStats, b: ArmStats): number {
     const decide = (
         aVal: number, bVal: number, aErr: number, bErr: number, higherIsBetter: boolean,
@@ -156,11 +175,26 @@ function compareArms(a: ArmStats, b: ArmStats): number {
     const hpCmp = decide(mean(a.hp), mean(b.hp), stderr(a.hp), stderr(b.hp), true);
     if (hpCmp !== 0) return hpCmp;
 
-    // 3. 給對手最多傷害
+    /*
+     * 3. 已經打掉的對手生命（越低越好）。
+     *
+     * 排在期望輸出之前是因為：這是既成事實，而 offense 是建立在 DEFENSE_PRIOR
+     * 這個未驗證先驗上的估計。確定的證據應該壓過估計。
+     *
+     * 實務上只有奪魂禁咒會在自己回合內直接扣對手血（每次 1 點），
+     * 其餘候選在這一層會直接平手往下走。補這一層是因為原本「扣對手血」
+     * 只有致死那一格有訊號 —— 扣到剩 1 血和完全沒扣同分。
+     */
+    if (compareUsesOppHp) {
+        const oppHpCmp = decide(mean(a.oppHp), mean(b.oppHp), stderr(a.oppHp), stderr(b.oppHp), false);
+        if (oppHpCmp !== 0) return oppHpCmp;
+    }
+
+    // 4. 給對手最多傷害
     const offCmp = decide(mean(a.offense), mean(b.offense), stderr(a.offense), stderr(b.offense), true);
     if (offCmp !== 0) return offCmp;
 
-    // 4. 卡片收益（最低優先，純平手判定）
+    // 5. 卡片收益（最低優先，純平手判定）
     return decide(mean(a.economy), mean(b.economy), stderr(a.economy), stderr(b.economy), true);
 }
 
@@ -230,6 +264,19 @@ export type BanditConfig = {
      * 代價很小：單次決策中位數 3.7ms → 7.5ms、最長 22.6ms，每局合計多約 4ms。
      */
     fateLadder: LadderStep[] | null;
+    /**
+     * 購買階段改用「便宜優先」而不是手調權重表。
+     *
+     * 為什麼：評分函式的 economy 只數張數、完全不看品質，
+     * 而 scoreCardForExpert 在優化品質 —— 搜尋看不見那 90 行權重帶來的差異，
+     * 它只是在 rollout 裡引入一個評分函式不認得的偏好。
+     * 固定金幣下，貪心買最便宜的可證明是張數最大化的最佳解，與 economy 對齊。
+     *
+     * 順位：免費 → 1 金（市場/牌庫隨機）→ 2 金（市場/牌庫隨機）→ 3 金，錢用完為止。
+     * 這是刻意的空白基準線：權重之後要用實測的出場率／觸發率回頭訂，
+     * 不再疊手調數字。高手（expert 啟發式）不受影響，仍用權重表。
+     */
+    simpleBuy: boolean;
 };
 
 /*
@@ -291,6 +338,7 @@ export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
     targetBudget: 60,
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
+    simpleBuy: true,
 };
 
 /*
@@ -322,6 +370,7 @@ export const GENTLE_BANDIT_CONFIG: BanditConfig = {
     targetBudget: 60,
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
+    simpleBuy: true,
 };
 
 /*
@@ -350,6 +399,7 @@ export const HALVING_BANDIT_CONFIG: BanditConfig = {
     targetBudget: 60,
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
+    simpleBuy: true,
 };
 
 /*
@@ -373,6 +423,7 @@ export const LEGACY_BANDIT_CONFIG: BanditConfig = {
     targetBudget: 60,
     simulateTargets: true,
     fateLadder: FATE_TARGET_LADDER,
+    simpleBuy: true,
 };
 
 /*

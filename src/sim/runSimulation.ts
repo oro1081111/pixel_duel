@@ -8,7 +8,7 @@ import {
   type OpeningMode,
   SimulationGame,
 } from './game';
-import {type BanditConfig, DEFAULT_BANDIT_CONFIG, FATE_TARGET_LADDER, FATE_TARGET_LADDER_LEAN, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
+import {type BanditConfig, DEFAULT_BANDIT_CONFIG, FATE_TARGET_LADDER, FATE_TARGET_LADDER_LEAN, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG, setCompareUsesOppHp} from './bandit';
 
 // 給 --ladder / --b-ladder 用的階梯預設值，方便兩種形狀直接對打
 const LADDER_PRESETS: Record<string, BanditConfig> = {
@@ -51,6 +51,7 @@ function parseArgs() {
     banditConfig: {...DEFAULT_BANDIT_CONFIG},
     // 對照組設定，給 bandit-tune 用（B 方坐第二席）
     banditConfigB: {...DEFAULT_BANDIT_CONFIG},
+    oppHpLayer: true,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -101,6 +102,16 @@ function parseArgs() {
       i++;
     } else if (arg === '--b-fate-ladder' && next) {
       opts.banditConfigB.fateLadder = pickFateLadder(next);
+      i++;
+    } else if (arg === '--simple-buy' && next) {
+      opts.banditConfig.simpleBuy = next === 'true';
+      i++;
+    } else if (arg === '--b-simple-buy' && next) {
+      opts.banditConfigB.simpleBuy = next === 'true';
+      i++;
+    } else if (arg === '--opp-hp-layer' && next) {
+      // 模組層旗標，兩座位共用 —— 只能拿整份設定跟另一份比，不能同局對打
+      opts.oppHpLayer = next === 'true';
       i++;
     } else if (arg === '--effect-budget' && next) {
       opts.banditConfig.effectBudget = Number(next);
@@ -231,6 +242,7 @@ function runTwoLegMatchup(
 
 function main() {
   const opts = parseArgs();
+  setCompareUsesOppHp(opts.oppHpLayer);
 
   console.log(`Initial HP: ${opts.hp}`);
   console.log(`Opening mode: ${opts.opening}`);

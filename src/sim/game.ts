@@ -320,6 +320,8 @@ export class SimulationGame {
     clone.turnCount = this.turnCount;
     clone.rolloutNoise = true;
     clone.isRolloutSandbox = true;
+    // 沙盤必須沿用同一組設定，否則 rollout 模擬的是「AI 實際上不會用的策略」
+    clone.banditConfigs = this.banditConfigs;
     return clone;
   }
 
@@ -1512,6 +1514,7 @@ export class SimulationGame {
     if (this.deck.length > 0 && this.buyDeckDrawCount < 1) {
       this.buyFromDeck();
     }
+    if (this.usesSimpleBuy()) return this.simpleBuyPhase();
 
     for (let i = 0; i < 20; i++) {
       const p = this.currentPlayer();
@@ -1542,6 +1545,39 @@ export class SimulationGame {
       } else {
         chooseUniform(actions).run();
       }
+    }
+  }
+
+  private usesSimpleBuy() {
+    return this.currentAiDifficulty() === 'bandit' && this.currentBanditConfig().simpleBuy;
+  }
+
+  /*
+   * 便宜優先購買：能買的裡面挑最便宜的，同價位隨機，錢用完為止。
+   *
+   * 評分函式的 economy 只數張數，所以「張數最大化」才是它真正在優化的東西 ——
+   * 固定金幣下貪心買最便宜的可證明是最佳解。金幣回合結束歸零，不留錢。
+   * 順位：免費 → 1 金（市場[2]/牌庫第2張）→ 2 金（市場[1]/牌庫第3張）→ 3 金（市場[0]）
+   */
+  private simpleBuyPhase() {
+    for (let i = 0; i < 20; i++) {
+      const p = this.currentPlayer();
+      const options: Array<{cost: number; run: () => void}> = [];
+
+      const nextDrawCost = this.deckDrawCost(this.buyDeckDrawCount + 1);
+      if (this.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
+        options.push({cost: nextDrawCost, run: () => this.buyFromDeck()});
+      }
+      ([0, 1, 2] as const).forEach(idx => {
+        const price = this.marketPrice(idx);
+        if (this.market[idx] && p.gold >= price) {
+          options.push({cost: price, run: () => this.buyMarketCard(idx)});
+        }
+      });
+
+      if (options.length === 0) return;
+      const cheapest = Math.min(...options.map(o => o.cost));
+      chooseUniform(options.filter(o => o.cost === cheapest)).run();
     }
   }
 
