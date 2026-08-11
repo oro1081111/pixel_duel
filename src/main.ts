@@ -49,6 +49,7 @@ import {
     shuffled,
 } from './engine/deck';
 import {getBaseAttrForDie, getBaseBarImg} from './basebars';
+import {chooseWinningPlayPurchasePlan, getWinningPlayWeight} from './ai/purchase';
 
 // Basebar image height (UI only)
 const BASEBAR_IMG_HEIGHT_PX = 45;
@@ -1308,7 +1309,7 @@ let aiSpeed = 0.7;
  * 電腦強度。
  *  - 'adept'（高手）：原本的啟發式 AI，靠手調權重評分。
  *  - 'expert'（專家）：模擬決策 AI，把每個候選實際打過幾百次再挑。
- * 兩者共用同一套規則與同一個回合流程，差別只在「出牌」與「效果發動」怎麼決定。
+ * 兩者共用同一套規則與同一個回合流程；專家另外使用勝局出牌率規劃購買。
  */
 type AiLevel = 'adept' | 'expert';
 let aiLevel: AiLevel = 'expert';
@@ -2440,6 +2441,7 @@ async function aiDoBuyPhase() {
     if (S.currentPhaseIndex !== 6) return;
     const p = getCurrentPlayer();
 
+    // 第 1 張牌庫牌永遠免費且必抽。
     if (S.deck.length > 0 && S.buyDeckDrawCount < 1) {
         logAi(`${getAiName()} 購買：先抽免費牌`);
         await sleep(randInt(240, 420));
@@ -2447,14 +2449,62 @@ async function aiDoBuyPhase() {
         return;
     }
 
+    if (aiLevel === 'expert') {
+        const plan = chooseWinningPlayPurchasePlan({
+  gold: p.gold,
+  buyDeckDrawCount: S.buyDeckDrawCount,
+  deck: S.deck,
+  market: S.market,
+  deckDrawCost: getDeckDrawCost,
+  marketPrice: getMarketPrice,
+  random: Math.random,
+        });
+
+        if (!plan) {
+  logAi(`${getAiName()} 購買：沒有可買選項，結束購買`);
+  await sleep(randInt(240, 420));
+  nextPhase();
+  return;
+        }
+
+        // 最佳方案含盲抽時先執行 1 次盲抽；實際看到牌後，下一輪重新規劃。
+        if (plan.deckDraws > 0) {
+  const nextDrawCost = getDeckDrawCost(S.buyDeckDrawCount + 1);
+  logAi(`${getAiName()} 購買：方案優先抽牌庫(-${nextDrawCost}金)`);
+  await sleep(randInt(280, 500));
+  buyFromDeck();
+  return;
+        }
+
+        // 純市場方案：先買方案中勝局出牌率最高的牌，再重新規劃剩餘金幣。
+        const availableSlots = plan.marketSlots.filter(slot => S.market[slot] != null);
+        if (availableSlots.length === 0) {
+  await sleep(randInt(180, 300));
+  nextPhase();
+  return;
+        }
+        const maxWeight = Math.max(...availableSlots.map(slot => getWinningPlayWeight(S.market[slot])));
+        const bestSlots = availableSlots.filter(
+  slot => Math.abs(getWinningPlayWeight(S.market[slot]) - maxWeight) < 1e-12,
+        );
+        const slot = chooseUniform(bestSlots);
+        const card = S.market[slot];
+        const price = getMarketPrice(slot);
+        logAi(`${getAiName()} 購買：規劃買市場(價格${price})「${card?.effectName ?? '未知'}」`);
+        await sleep(randInt(280, 500));
+        buyMarketCard(slot);
+        return;
+    }
+
+    // 高手維持既有啟發式購買策略。
     const actions: Array<{label: string; score: number; run: () => void}> = [];
     const nextDrawIndex = S.buyDeckDrawCount + 1;
     const nextDrawCost = getDeckDrawCost(nextDrawIndex);
     if (S.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
         actions.push({
-            label: `抽牌庫(-${nextDrawCost}金)`,
-            score: 5.8 - nextDrawCost * 1.1 + Math.random() * 0.1,
-            run: () => buyFromDeck(),
+  label: `抽牌庫(-${nextDrawCost}金)`,
+  score: 5.8 - nextDrawCost * 1.1 + Math.random() * 0.1,
+  run: () => buyFromDeck(),
         });
     }
 
@@ -2464,9 +2514,9 @@ async function aiDoBuyPhase() {
         const price = getMarketPrice(idx);
         if (p.gold < price) return;
         actions.push({
-            label: `買市場(價格${price})「${c.effectName}」`,
-            score: scoreCardForExpert(c) - price * 1.35 + Math.random() * 0.1,
-            run: () => buyMarketCard(idx),
+  label: `買市場(價格${price})「${c.effectName}」`,
+  score: scoreCardForExpert(c) - price * 1.35 + Math.random() * 0.1,
+  run: () => buyMarketCard(idx),
         });
     });
 

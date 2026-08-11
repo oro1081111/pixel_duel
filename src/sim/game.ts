@@ -44,6 +44,7 @@ import {
   applyThrust,
 } from '../engine/effects';
 import {getBaseAttrForDie} from '../basebars';
+import {averageWinningPlayWeight, chooseWinningPlayPurchasePlan, getWinningPlayWeight} from '../ai/purchase';
 
 
 
@@ -55,7 +56,7 @@ export type Winner = 0 | 1 | 'draw';
 export type OpeningMode = 'prep' | 'even' | 'staged';
 /*
  * bandit：新的單回合模擬 AI（見 sim/bandit.ts）。
- * 它只接管「出牌」與「效果發動」兩個決策點；其餘階段沿用 expert 的啟發式，
+ * 它接管「出牌」「效果發動」與「購買」決策；其餘階段沿用 expert 的啟發式，
  * rollout 內部也一律用 expert 走完 —— 所以除了那兩個決策點，行為與 expert 相同。
  */
 export type AiDifficulty = 'normal' | 'expert' | 'bandit';
@@ -1499,6 +1500,12 @@ export class SimulationGame {
   }
 
   private aiBuyPhase() {
+    // 專家（bandit）使用勝局出牌率的完整購買方案；高手／一般維持原本邏輯。
+    if (this.currentAiDifficulty() === 'bandit') {
+      this.aiBuyPhaseWinningPlay();
+      return;
+    }
+
     this.currentPhaseIndex = 6;
     if (this.deck.length > 0 && this.buyDeckDrawCount < 1) {
       this.buyFromDeck();
@@ -1511,20 +1518,20 @@ export class SimulationGame {
       const nextDrawCost = this.deckDrawCost(nextDrawIndex);
       if (this.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
         actions.push({
-          score: this.usesExpertHeuristics() ? 5.8 - nextDrawCost * 1.1 + rng() * 0.1 : rng(),
-          run: () => this.buyFromDeck(),
+score: this.usesExpertHeuristics() ? 5.8 - nextDrawCost * 1.1 + rng() * 0.1 : rng(),
+run: () => this.buyFromDeck(),
         });
       }
       ([0, 1, 2] as const).forEach(idx => {
         const c = this.market[idx];
         const price = this.marketPrice(idx);
         if (c && p.gold >= price) {
-          actions.push({
-            score: this.usesExpertHeuristics()
-              ? this.scoreCardForExpert(c) - price * 1.35 + rng() * 0.1
-              : rng(),
-            run: () => this.buyMarketCard(idx),
-          });
+actions.push({
+  score: this.usesExpertHeuristics()
+    ? this.scoreCardForExpert(c) - price * 1.35 + rng() * 0.1
+    : rng(),
+  run: () => this.buyMarketCard(idx),
+});
         }
       });
       if (actions.length === 0) return;
@@ -1533,6 +1540,66 @@ export class SimulationGame {
       } else {
         chooseUniform(actions).run();
       }
+    }
+  }
+
+  private aiBuyPhaseWinningPlay() {
+    this.currentPhaseIndex = 6;
+
+    // Rollout 不能知道任何盲抽的實際身分（包含免費抽牌）。
+    // 因此在抽免費牌之前凍結平均值，整個 rollout 購買階段只使用這個期望值。
+    const rolloutDeckAverage = this.isRolloutSandbox
+      ? averageWinningPlayWeight(this.deck)
+      : undefined;
+
+    // 第 1 張牌庫牌永遠免費且必抽。
+    if (this.deck.length > 0 && this.buyDeckDrawCount < 1) {
+      this.buyFromDeck();
+    }
+
+    const choosePlan = () => chooseWinningPlayPurchasePlan({
+      gold: this.currentPlayer().gold,
+      buyDeckDrawCount: this.buyDeckDrawCount,
+      deck: this.deck,
+      market: this.market,
+      deckDrawCost: drawIndex => this.deckDrawCost(drawIndex),
+      marketPrice: slotIdx => this.marketPrice(slotIdx),
+      random: rng,
+      deckAverageOverride: rolloutDeckAverage,
+    });
+
+    // Rollout：只依盲抽前可知資訊規劃一次，之後整套執行到底。
+    // 模擬中真正抽到哪張牌，不得觸發重新評估。
+    if (this.isRolloutSandbox) {
+      const plan = choosePlan();
+      if (!plan) return;
+      for (let i = 0; i < plan.deckDraws; i++) this.buyFromDeck();
+      for (const slot of plan.marketSlots) {
+        if (this.market[slot]) this.buyMarketCard(slot);
+      }
+      return;
+    }
+
+    // 真實專家：每完成一次購買都重新規劃。
+    // 尤其盲抽後已經知道抽到什麼，因此剩餘牌庫平均值會隨之更新。
+    for (let step = 0; step < 20; step++) {
+      const plan = choosePlan();
+      if (!plan) return;
+
+      // 若最佳方案包含盲抽，先抽 1 張；看到結果後下一輪重新評估。
+      if (plan.deckDraws > 0) {
+        this.buyFromDeck();
+        continue;
+      }
+
+      // 沒有盲抽時，從最佳方案中先買權重最高的公開市場牌，再重新評估。
+      const availableSlots = plan.marketSlots.filter(slot => this.market[slot] != null);
+      if (availableSlots.length === 0) return;
+      const maxWeight = Math.max(...availableSlots.map(slot => getWinningPlayWeight(this.market[slot])));
+      const bestSlots = availableSlots.filter(
+        slot => Math.abs(getWinningPlayWeight(this.market[slot]) - maxWeight) < 1e-12,
+      );
+      this.buyMarketCard(chooseUniform(bestSlots));
     }
   }
 
