@@ -44,6 +44,7 @@ import {
     refillMarket as refillMarketList,
     shuffled,
 } from './engine/deck';
+import {advanceTurnPhase, getTurnAdvanceBlockReason, type TurnAdvanceBlockReason} from './engine/turnFlow';
 import {getBaseBarImg} from './basebars';
 import {AdeptHeuristic} from './ai/heuristic';
 import {chooseWinningPlayPurchasePlan, getWinningPlayWeight} from './ai/purchase';
@@ -1288,7 +1289,7 @@ function addLog(msg) {
     if (S.gameLog.length > 30) S.gameLog.shift(); // Keep more history
 }
 
-// --- Computer AI (uniform random) ---
+// --- Computer AI ---
 
 let computerBusy = false;
 
@@ -2112,159 +2113,88 @@ function getDisplayPhaseHint(blockReason: string | null): string {
     return blockReason || S.phaseHint;
 }
 
+function getTurnAdvanceBlockText(reason: TurnAdvanceBlockReason | null): string | null {
+    if (reason === 'must-play-card') return '至少出 1 張';
+    if (reason === 'must-roll-dice') return '必須先擲骰';
+    if (reason === 'must-take-free-deck-card') return '先抽免費牌，再買';
+    return null;
+}
+
 function getActionBlockReason(): string | null {
     // 準備階段的「開始」有自己的啟用條件（後手出滿 1 張），
     // 這裡不要插手，否則會顯示錯的原因。
     if (S.inPreparationPhase) return null;
     if (S.luckySelectionMode) return '幸運之石：移除1骰';
-    const p = getCurrentPlayer();
-    if (S.currentPhaseIndex === 0 && p.hand.length > 0 && p.cardsPlayedThisTurn === 0) return '至少出 1 張';
-    // 和購買階段的提示用同一句，否則短的那句會蓋掉長的，變成兩種說法
-    if (S.currentPhaseIndex === 6 && S.deck.length > 0 && S.buyDeckDrawCount < 1) return '先抽免費牌，再買';
-    return null;
+    return getTurnAdvanceBlockText(getTurnAdvanceBlockReason(S));
+}
+
+function resetUiTurnSelectionModes() {
+    S.fateSelectionMode = false;
+    S.fateSelectedDiceIndices = [];
+    S.fateSourceAreaIdx = -1;
+    S.evasionSelectionMode = false;
+    S.evasionSourceAreaIdx = -1;
+    S.chargeSelectionMode = false;
+    S.chargeSourceAreaIdx = -1;
+    S.reproductionSelectionMode = false;
+    S.reproductionSourceAreaIdx = -1;
+    S.flareSelectionMode = false;
+    S.flareSourceAreaIdx = -1;
+    S.frostSelectionMode = false;
+    S.frostSourceAreaIdx = -1;
 }
 
 function nextPhase() {
-  const now = Date.now();
-  if (now < phaseAdvanceLockUntil) return;
-  phaseAdvanceLockUntil = now + 250;
+    const now = Date.now();
+    if (now < phaseAdvanceLockUntil) return;
+    phaseAdvanceLockUntil = now + 250;
 
-  if (S.winner) return;
-  if (S.luckySelectionMode) return;
-  const p = getCurrentPlayer();
+    if (S.winner) return;
+    if (S.luckySelectionMode) return;
 
-  if (S.currentPhaseIndex === 0) { // Play Phase
-      // Rule: Hand >= 1 -> Must play at least 1
-      if (p.hand.length > 0 && p.cardsPlayedThisTurn === 0) {
-          S.phaseHint = '至少出 1 張';
-          render();
-          return;
-      }
+    const transition = advanceTurnPhase(S);
+    if ('blockReason' in transition) {
+        S.phaseHint = getTurnAdvanceBlockText(transition.blockReason) || S.phaseHint;
+        render();
+        return;
+    }
 
-       // 只有「回合一開始就沒有手牌」才算跳過出牌階段（擲骰階段固定投 5 顆）。
-       // 把手牌打完不算 —— 那是正常出過牌，訊息會誤導。
-       if (p.hand.length === 0 && p.cardsPlayedThisTurn === 0) {
-           S.skippedPlayBecauseNoHand = true;
-           S.phaseHint = '沒有手牌，直接進行擲骰';
-       } else {
-           S.skippedPlayBecauseNoHand = false;
-       }
+    if (transition.effect === 'roll-start') {
+        // 手機版 UX：離開出牌階段就先收起手牌抽屜。
+        handDrawerOpen = false;
+        S.phaseHint = S.skippedPlayBecauseNoHand
+            ? '沒有手牌，直接進行擲骰'
+            : '請擲骰';
+    } else if (transition.effect === 'judging') {
+        S.phaseHint = '數值判定中';
+        handleJudging();
+    } else if (transition.effect === 'defense-start') {
+        S.phaseHint = S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn
+            ? '先手首回合跳過'
+            : '防禦對手攻擊';
+        handleDefensePhaseStart();
+    } else if (transition.effect === 'damage') {
+        S.phaseHint = S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn
+            ? '先手首回合跳過'
+            : '結算傷害';
+        handleDamagePhase();
+    } else if (transition.effect === 'attack-start') {
+        S.phaseHint = '攻擊效果發動';
+        handleAttackPhaseStart();
+    } else if (transition.effect === 'buy-start') {
+        // 提示由 handleBuyPhase 依牌庫狀態決定。
+        handleBuyPhase();
+    } else if (transition.effect === 'turn-start') {
+        S.phaseHint = S.players[S.currentPlayerIndex].hand.length === 0
+            ? '沒有手牌，直接進行擲骰'
+            : '選牌出牌';
+        // Mobile：進入出牌階段時手牌抽屜自動彈出，並切回手牌。
+        mobileDockTab = 'hand';
+        handDrawerOpen = isMobileLayout();
+        resetUiTurnSelectionModes();
+    }
 
-      S.currentPhaseIndex = 1;
-      // 手機版 UX：離開出牌階段就先收起手牌抽屜
-      handDrawerOpen = false;
-      if (!S.skippedPlayBecauseNoHand) {
-          S.phaseHint = '請擲骰';
-      }
-  } else if (S.currentPhaseIndex === 1) { // Roll Phase
-      if (S.diceResults.length === 0) {
-          S.phaseHint = '必須先擲骰';
-          render();
-          return;
-      }
-      S.currentPhaseIndex = 2;
-      S.phaseHint = '數值判定中';
-      handleJudging();
-  } else if (S.currentPhaseIndex === 2) { // Judging
-      S.currentPhaseIndex = 3;
-      if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) {
-          S.phaseHint = '先手首回合跳過';
-      } else {
-          S.phaseHint = '防禦對手攻擊';
-      }
-      handleDefensePhaseStart();
-  } else if (S.currentPhaseIndex === 3) { // Defense
-      S.currentPhaseIndex = 4;
-      if (S.currentPlayerIndex === 0 && S.firstPlayerFirstTurn) {
-          S.phaseHint = '先手首回合跳過';
-      } else {
-          S.phaseHint = '結算傷害';
-      }
-      handleDamagePhase();
-  } else if (S.currentPhaseIndex === 4) { // Damage
-      S.currentPhaseIndex = 5;
-      S.phaseHint = '攻擊效果發動';
-      handleAttackPhaseStart();
-  } else if (S.currentPhaseIndex === 5) { // Attack
-      // Store current attacks into queue
-      p.attackQueue = p.currentAttacks.map(h => [...h]);
-      p.piercingQueue = p.piercingAttacks.map(h => [...h]);
-      S.currentPhaseIndex = 6;
-      // 提示由 handleBuyPhase 依牌庫狀態決定，這裡不要先寫一個馬上被蓋掉的值
-      handleBuyPhase();
-  } else if (S.currentPhaseIndex === 6) { // Buy
-      // 必須先從牌庫抽第 1 張 (0 金)
-      // 若牌庫已空：取消「必抽 1 張免費卡」限制，避免卡關
-      if (S.deck.length > 0 && S.buyDeckDrawCount < 1) {
-          S.phaseHint = '先抽免費牌';
-          render();
-          return;
-      }
-
-      // End of buy: 自動處理市場補位
-      refillMarket();
-
-      // End turn
-      p.magic = 0;
-      p.gold = 0;
-      p.defense = 0;
-      
-      S.currentPlayerIndex = 1 - S.currentPlayerIndex;
-      S.currentPhaseIndex = 0;
-      S.phaseHint = S.players[S.currentPlayerIndex].hand.length === 0
-          ? '沒有手牌，直接進行擲骰'
-          : '選牌出牌';
-      S.diceResults = [];
-      S.skippedPlayBecauseNoHand = false;
-      // Mobile：進入出牌階段時手牌抽屜自動彈出
-      // 並預設切回手牌（避免停留在上一回合的市場 tab）
-      mobileDockTab = 'hand';
-      handDrawerOpen = isMobileLayout();
-      S.players[S.currentPlayerIndex].cardsPlayedThisTurn = 0;
-      S.players[S.currentPlayerIndex].chargeUsedIndices = [];
-      S.players[S.currentPlayerIndex].amplifyUsedIndices = [];
-      S.players[S.currentPlayerIndex].fateUsedIndices = [];
-      S.players[S.currentPlayerIndex].evasionUsedIndices = [];
-      S.players[S.currentPlayerIndex].reproductionUsedIndices = [];
-      S.players[S.currentPlayerIndex].flareUsedIndices = [];
-      S.players[S.currentPlayerIndex].magicLuckUsedIndices = [];
-      S.players[S.currentPlayerIndex].illusionUsedIndices = [];
-      S.players[S.currentPlayerIndex].illusionCopiedEffectIds = [null, null, null];
-      S.players[S.currentPlayerIndex].thrustUsedIndices = [];
-      S.players[S.currentPlayerIndex].barrierUsedIndices = [];
-      S.players[S.currentPlayerIndex].forestUsedIndices = [];
-      S.players[S.currentPlayerIndex].frostUsedIndices = [];
-      S.players[S.currentPlayerIndex].magicSpentInJudging = 0;
-      S.players[S.currentPlayerIndex].extraFrostAttacks = [[], [], []];
-      S.players[S.currentPlayerIndex].contractTriggeredAreaIdx = -1;
-      S.players[S.currentPlayerIndex].turnBaseStats = { sums: [0, 0, 0], defense: [0, 0, 0], magic: [0, 0, 0], gold: [0, 0, 0] };
-      S.players[S.currentPlayerIndex].breakthroughApplied = false;
-      S.players[S.currentPlayerIndex].currentAttacks = [[0], [0], [0]];
-      S.players[S.currentPlayerIndex].piercingAttacks = [[], [], []];
-      S.players[S.currentPlayerIndex].magic = 0;
-      S.players[S.currentPlayerIndex].gold = 0;
-      S.players[S.currentPlayerIndex].defense = 0;
-      
-      S.fateSelectionMode = false;
-      S.fateSelectedDiceIndices = [];
-      S.fateSourceAreaIdx = -1;
-      S.evasionSelectionMode = false;
-      S.evasionSourceAreaIdx = -1;
-      S.chargeSelectionMode = false;
-      S.chargeSourceAreaIdx = -1;
-      S.reproductionSelectionMode = false;
-      S.reproductionSourceAreaIdx = -1;
-      S.flareSelectionMode = false;
-      S.flareSourceAreaIdx = -1;
-      S.frostSelectionMode = false;
-      S.frostSourceAreaIdx = -1;
-      
-      if (S.currentPlayerIndex === 0) {
-          S.firstPlayerFirstTurn = false;
-      }
-  }
-
-  render();
+    render();
 }
 
 function isMirageActive() {
