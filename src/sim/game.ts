@@ -41,6 +41,7 @@ import {
   applyThrust,
 } from '../engine/effects';
 import {AdeptHeuristic} from '../ai/heuristic';
+import {advanceTurnPhase, beginTurnState} from '../engine/turnFlow';
 import {averageWinningPlayWeight, chooseWinningPlayPurchasePlan, getWinningPlayWeight} from '../ai/purchase';
 
 
@@ -244,29 +245,38 @@ export class SimulationGame {
   }
 
   /*
-   * 從目前所在的階段一路跑到回合結束（但不呼叫 endTurn —— 那會把魔力金幣清成 0，
-   * 而我們正要評估的就是這回合產出了什麼）。
-   * 這段必須和 runAiTurn 的階段順序完全一致，否則模擬的就不是真的那個遊戲。
+   * 正式模擬與 rollout 共用同一段「擲骰後一路跑到購買」流程。
+   * 差別只在 activatePhase：正式 expert 用 bandit，rollout 用 adept，避免巢狀 rollout。
    */
-  finishTurnForRollout(skipActivations = false, skipPhase = -1) {
-    // skipActivations：bandit 選了 STOP，該階段不應該再由 adept 補發動
-    const runPhase = (phase: number) => {
-      if (skipActivations && phase === skipPhase) this.currentPhaseIndex = phase;
-      else this.aiActivationLoop(phase);
-    };
-
+  private runPostPlayTurn(
+    activatePhase: (phase: number) => void,
+    {endTurn = false}: {endTurn?: boolean} = {},
+  ) {
     if (this.currentPhaseIndex <= 1) {
       this.currentPhaseIndex = 1;
       if (this.diceResults.length === 0) this.aiRollPhase();
-      runPhase(1);
+      activatePhase(1);
       this.nextPhase();
     }
-    if (this.currentPhaseIndex === 2) { runPhase(2); this.nextPhase(); }
-    if (this.currentPhaseIndex === 3) { runPhase(3); this.nextPhase(); }
-    if (this.currentPhaseIndex === 4) { runPhase(4); this.nextPhase(); }
+    if (this.currentPhaseIndex === 2) { activatePhase(2); this.nextPhase(); }
+    if (this.currentPhaseIndex === 3) { activatePhase(3); this.nextPhase(); }
     if (this.winner !== null) return;
-    if (this.currentPhaseIndex === 5) { runPhase(5); this.nextPhase(); }
-    if (this.currentPhaseIndex === 6) this.aiBuyPhase();
+    if (this.currentPhaseIndex === 4) { activatePhase(4); this.nextPhase(); }
+    if (this.winner !== null) return;
+    if (this.currentPhaseIndex === 5) { activatePhase(5); this.nextPhase(); }
+    if (this.currentPhaseIndex === 6) {
+      this.aiBuyPhase();
+      if (endTurn) this.endTurn();
+    }
+  }
+
+  finishTurnForRollout(skipActivations = false, skipPhase = -1) {
+    // bandit 選了 STOP 時，該階段不再由 adept 補發動；其餘後續仍走同一個共用 runner。
+    const activatePhase = (phase: number) => {
+      if (skipActivations && phase === skipPhase) this.currentPhaseIndex = phase;
+      else this.aiActivationLoop(phase);
+    };
+    this.runPostPlayTurn(activatePhase);
   }
 
   playCardPublic(handIdx: number, areaIdx: number) {
@@ -351,39 +361,18 @@ export class SimulationGame {
 
   private runAiTurn() {
     this.turnCount++;
-    this.currentPhaseIndex = 0;
-    this.buyDeckDrawCount = 0;
-    this.diceResults = [];
-    this.skippedPlayBecauseNoHand = false;
-    this.resetTurnState(this.currentPlayer());
+    beginTurnState(this);
 
     const isExpert = this.currentAiDifficulty() === 'expert';
     if (isExpert) this.banditPlayPhase();
     else this.aiPlayPhase();
     if (this.winner !== null) return;
 
-    this.aiRollPhase();
-    const activations = (phase: number) =>
-      isExpert ? this.banditActivationLoop(phase) : this.aiActivationLoop(phase);
-
-    activations(1);
-    this.nextPhase();
-
-    activations(2);
-    this.nextPhase();
-
-    activations(3);
-    this.nextPhase();
-
-    activations(4);
-    this.nextPhase();
-    if (this.winner !== null) return;
-
-    activations(5);
-    this.nextPhase();
-
-    this.aiBuyPhase();
-    this.endTurn();
+    const activatePhase = (phase: number) => {
+      if (isExpert) this.banditActivationLoop(phase);
+      else this.aiActivationLoop(phase);
+    };
+    this.runPostPlayTurn(activatePhase, {endTurn: true});
   }
 
   /*
@@ -467,33 +456,6 @@ export class SimulationGame {
 
   private getEffectiveEffectId(p: PlayerState, areaIdx: number) {
     return getEffectiveEffectId(p, areaIdx);
-  }
-
-  private resetTurnState(p: PlayerState) {
-    p.cardsPlayedThisTurn = 0;
-    p.chargeUsedIndices = [];
-    p.amplifyUsedIndices = [];
-    p.fateUsedIndices = [];
-    p.evasionUsedIndices = [];
-    p.reproductionUsedIndices = [];
-    p.flareUsedIndices = [];
-    p.magicLuckUsedIndices = [];
-    p.illusionUsedIndices = [];
-    p.illusionCopiedEffectIds = [null, null, null];
-    p.thrustUsedIndices = [];
-    p.barrierUsedIndices = [];
-    p.forestUsedIndices = [];
-    p.frostUsedIndices = [];
-    p.magicSpentInJudging = 0;
-    p.extraFrostAttacks = [[], [], []];
-    p.contractTriggeredAreaIdx = -1;
-    p.turnBaseStats = {sums: [0, 0, 0], defense: [0, 0, 0], magic: [0, 0, 0], gold: [0, 0, 0]};
-    p.breakthroughApplied = false;
-    p.currentAttacks = [[0], [0], [0]];
-    p.piercingAttacks = [[], [], []];
-    p.magic = 0;
-    p.gold = 0;
-    p.defense = 0;
   }
 
   private adeptHeuristic() {
@@ -628,22 +590,10 @@ export class SimulationGame {
 
   private nextPhase() {
     if (this.winner !== null) return;
-    if (this.currentPhaseIndex === 1) {
-      this.currentPhaseIndex = 2;
-      this.handleJudging();
-    } else if (this.currentPhaseIndex === 2) {
-      this.currentPhaseIndex = 3;
-    } else if (this.currentPhaseIndex === 3) {
-      this.currentPhaseIndex = 4;
-      this.handleDamagePhase();
-    } else if (this.currentPhaseIndex === 4) {
-      this.currentPhaseIndex = 5;
-    } else if (this.currentPhaseIndex === 5) {
-      const p = this.currentPlayer();
-      p.attackQueue = p.currentAttacks.map(h => [...h]);
-      p.piercingQueue = p.piercingAttacks.map(h => [...h]);
-      this.currentPhaseIndex = 6;
-    }
+    const transition = advanceTurnPhase(this);
+    if (!transition.advanced) return;
+    if (transition.effect === 'judging') this.handleJudging();
+    else if (transition.effect === 'damage') this.handleDamagePhase();
   }
 
   // 判定的規則本體在 engine/resolve.ts，與 UI 共用同一份
@@ -1041,12 +991,12 @@ actions.push({
   }
 
   private endTurn() {
-    this.refillMarket();
-    const p = this.currentPlayer();
-    p.magic = 0;
-    p.gold = 0;
-    p.defense = 0;
-    this.currentPlayerIndex = this.opponentIndex();
-    if (this.currentPlayerIndex === 0) this.firstPlayerFirstTurn = false;
+    const transition = advanceTurnPhase(this);
+    if ('blockReason' in transition) {
+      throw new Error(`endTurn blocked: ${transition.blockReason}`);
+    }
+    if (transition.effect !== 'turn-start') {
+      throw new Error(`endTurn called outside buy phase: ${transition.effect}`);
+    }
   }
 }
