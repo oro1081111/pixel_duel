@@ -12,8 +12,8 @@ import {
 function card(id: string): GameCard {
     return {
         id,
-        left: 'attack',
-        right: 'gold',
+        left: {type: 'attack', value: 1},
+        right: {type: 'gold', value: 1},
         effectId: 'ambush',
         effectName: 'test',
         effectDesc: 'test',
