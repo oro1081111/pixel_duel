@@ -9,7 +9,6 @@
 import {banditChooseActivation, banditChoosePlayPlan, banditChooseTarget, enumerateDiceSubsets, type BanditConfig, DEFAULT_BANDIT_CONFIG} from './bandit';
 import {chooseUniform, randInt, rng} from './rng';
 
-import type {CardAttr} from '../cards';
 // 與 UI 共用同一份規則型別與純計算（見 src/engine/state.ts）
 import {type GameCard, type PlayerState, createPlayer} from '../engine/state';
 import {
@@ -18,12 +17,10 @@ import {
   getDeckDrawCost,
   getEffectiveEffectId,
   getMarketPrice,
-  hasActiveEffect,
-  isMirageActive,
   refillMarket,
   shuffled,
 } from '../engine/deck';
-import {isMagicSpendActivation, listActivations} from '../engine/activations';
+import {listActivations} from '../engine/activations';
 import {resolveDamagePhase, resolveJudging} from '../engine/resolve';
 import {
   applyAmplify,
@@ -43,7 +40,7 @@ import {
   applySoulSnatch,
   applyThrust,
 } from '../engine/effects';
-import {getBaseAttrForDie} from '../basebars';
+import {AdeptHeuristic} from '../ai/heuristic';
 import {averageWinningPlayWeight, chooseWinningPlayPurchasePlan, getWinningPlayWeight} from '../ai/purchase';
 
 
@@ -56,10 +53,10 @@ export type Winner = 0 | 1 | 'draw';
 export type OpeningMode = 'prep' | 'even' | 'staged';
 /*
  * bandit：新的單回合模擬 AI（見 sim/bandit.ts）。
- * 它接管「出牌」「效果發動」與「購買」決策；其餘階段沿用 expert 的啟發式，
- * rollout 內部也一律用 expert 走完 —— 所以除了那兩個決策點，行為與 expert 相同。
+ * 它接管「出牌」「效果發動」與「購買」決策；其餘階段沿用 adept 的啟發式，
+ * rollout 內部也一律用 adept 走完 —— 所以除了那兩個決策點，行為與 adept 相同。
  */
-export type AiDifficulty = 'normal' | 'expert' | 'bandit';
+export type AiDifficulty = 'normal' | 'adept' | 'expert';
 const ILLUSION_UNCOPYABLE_EFFECT_IDS = new Set<string>(['lucky', 'fate', 'frost']);
 /*
  * 模擬器內所有亂數都走 sim/rng.ts 的可切換來源，不直接用 rng()。
@@ -81,75 +78,6 @@ function chooseHighestAttackTarget<T extends {val: number}>(targets: T[]): T {
 function chooseAiWeightedAttackTarget<T extends {val: number}>(targets: T[]): T {
   return rng() < 0.9 ? chooseHighestAttackTarget(targets) : chooseUniform(targets);
 }
-
-const AI_EFFECT_WEIGHTS: Record<string, number> = {
-  diversion: 10,
-  mirage: 9.5,
-  brilliance: 8.8,
-  forest: 8.2,
-  flare: 8,
-  reproduction: 7.8,
-  charge: 7.4,
-  soul_snatch: 7.2,
-  amplify: 7,
-  dodge: 6.8,
-  magic_bullet: 6.6,
-  fate: 6.4,
-  shadow: 6.2,
-  gale: 6,
-  thrust: 5.9,
-  barrier: 5.8,
-  holy_light: 5.7,
-  frost: 5.6,
-  lucky: 5.4,
-  backfire: 5.3,
-  surge: 5.2,
-  magic_luck: 5,
-  shield: 4.8,
-  contract: 4.6,
-  breakthrough: 4.4,
-  flame_shield: 4.3,
-  illusion: 6,
-  ambush: 4.2,
-};
-
-const AI_ATTR_WEIGHTS: Record<string, number> = {
-  attack: 2.15,
-  magic: 1.6,
-  defense: 1.6,
-  gold: 1.15,
-};
-
-// Each die lands in one of the three areas with equal probability.
-const DIE_AREA_PROBABILITY = 1 / 3;
-const SHADOW_PIERCING_DAMAGE = 3;
-const BRILLIANCE_ATTACK_BONUS = 7;
-const BRILLIANCE_DICE_REQUIRED = 3;
-// Shadow damage ignores defense, so it is worth a bit more than plain attack.
-const PIERCING_DAMAGE_MULTIPLIER = 1.15;
-
-// P(X >= successes) for X ~ Binomial(trials, probability)
-function binomialProbAtLeast(successes: number, trials: number, probability: number) {
-  if (successes <= 0) return 1;
-  if (successes > trials) return 0;
-  let cumulative = 0;
-  let term = Math.pow(1 - probability, trials);
-  for (let i = 0; i < successes; i++) {
-    cumulative += term;
-    term = term * ((trials - i) / (i + 1)) * (probability / (1 - probability));
-  }
-  return Math.max(0, 1 - cumulative);
-}
-
-// 哪些效果要花魔力，由 engine/activations.ts 的條件表決定（與 UI 同一份）。
-const isMagicSpendEffect = isMagicSpendActivation;
-
-function aiEffectWeight(effectId: string | null | undefined) {
-  if (!effectId) return 0;
-  return AI_EFFECT_WEIGHTS[effectId] ?? 4;
-}
-
-
 
 // PlayerState 幾乎全是陣列，淺拷貝會讓 rollout 改到真實對局的狀態。
 function clonePlayer(p: PlayerState): PlayerState {
@@ -200,7 +128,7 @@ export class SimulationGame {
 
   /*
    * rollout 模式：這一份是 bandit 用來試打的複製品，不是真實對局。
-   * 開著時，expert 啟發式會有 ~15% 機率不選最高分、而是從前三名裡挑一個 ——
+   * 開著時，adept 啟發式會有 ~15% 機率不選最高分、而是從前三名裡挑一個 ——
    * rollout policy 完全貪心的話，同一個候選每次都走出幾乎一樣的路線，
    * 模擬出來的變異數會低估真實情況。
    */
@@ -214,8 +142,8 @@ export class SimulationGame {
   isRolloutSandbox = false;
 
   /** 真實對局中的專家：這幾張卡的目標值得用模擬挑 */
-  private banditPicksTargets() {
-    return this.currentAiDifficulty() === 'bandit'
+  private expertPicksTargets() {
+    return this.currentAiDifficulty() === 'expert'
       && !this.isRolloutSandbox
       && this.currentBanditConfig().simulateTargets;
   }
@@ -223,7 +151,7 @@ export class SimulationGame {
   /*
    * 每個座位各自的 bandit 設定。
    * 兩邊可以不同，才能讓「高預算」與「低預算」直接對打 ——
-   * 都拿去打 expert 的話，雙方勝率都逼近天花板，量不出彼此的差距。
+   * 都拿去打 adept 的話，雙方勝率都逼近天花板，量不出彼此的差距。
    */
   banditConfigs: [BanditConfig, BanditConfig] = [DEFAULT_BANDIT_CONFIG, DEFAULT_BANDIT_CONFIG];
 
@@ -259,7 +187,7 @@ export class SimulationGame {
     firstPlayerFirstTurn: boolean;
     buyDeckDrawCount: number;
   }): SimulationGame {
-    const g = new SimulationGame(12, 500, 'prep', ['bandit', 'bandit'], true);
+    const g = new SimulationGame(12, 500, 'prep', ['expert', 'expert'], true);
     g.deck = [...init.deck];
     g.market = [...init.market];
     g.players = [clonePlayer(init.players[0]), clonePlayer(init.players[1])];
@@ -271,7 +199,7 @@ export class SimulationGame {
     return g;
   }
 
-  usesExpertHeuristics() {
+  usesAdeptHeuristics() {
     return this.currentAiDifficulty() !== 'normal';
   }
 
@@ -321,7 +249,7 @@ export class SimulationGame {
    * 這段必須和 runAiTurn 的階段順序完全一致，否則模擬的就不是真的那個遊戲。
    */
   finishTurnForRollout(skipActivations = false, skipPhase = -1) {
-    // skipActivations：bandit 選了 STOP，該階段不應該再由 expert 補發動
+    // skipActivations：bandit 選了 STOP，該階段不應該再由 adept 補發動
     const runPhase = (phase: number) => {
       if (skipActivations && phase === skipPhase) this.currentPhaseIndex = phase;
       else this.aiActivationLoop(phase);
@@ -409,8 +337,8 @@ export class SimulationGame {
   private playRandomCardsForCurrentPlayer(count: number) {
     const p = this.currentPlayer();
     for (let i = 0; i < count && p.hand.length > 0; i++) {
-      if (this.usesExpertHeuristics()) {
-        const choice = this.chooseExpertPlay();
+      if (this.usesAdeptHeuristics()) {
+        const choice = this.chooseAdeptPlay();
         if (!choice) break;
         this.playCard(choice.handIdx, choice.areaIdx);
       } else {
@@ -429,14 +357,14 @@ export class SimulationGame {
     this.skippedPlayBecauseNoHand = false;
     this.resetTurnState(this.currentPlayer());
 
-    const isBandit = this.currentAiDifficulty() === 'bandit';
-    if (isBandit) this.banditPlayPhase();
+    const isExpert = this.currentAiDifficulty() === 'expert';
+    if (isExpert) this.banditPlayPhase();
     else this.aiPlayPhase();
     if (this.winner !== null) return;
 
     this.aiRollPhase();
     const activations = (phase: number) =>
-      isBandit ? this.banditActivationLoop(phase) : this.aiActivationLoop(phase);
+      isExpert ? this.banditActivationLoop(phase) : this.aiActivationLoop(phase);
 
     activations(1);
     this.nextPhase();
@@ -541,98 +469,6 @@ export class SimulationGame {
     return getEffectiveEffectId(p, areaIdx);
   }
 
-  private isMirageActive() {
-    return isMirageActive(this.players);
-  }
-
-  private hasExpertEffect(p: PlayerState, effectId: string) {
-    return hasActiveEffect(p, effectId);
-  }
-
-  private hasHandEffect(p: PlayerState, effectId: string) {
-    return p.hand.some(c => c.effectId === effectId);
-  }
-
-  private countHandEffects(p: PlayerState, effectIds: string[]) {
-    return p.hand.filter(c => effectIds.includes(c.effectId)).length;
-  }
-
-  private countMagicSpendCards(p: PlayerState) {
-    const activeCount = p.activeAreaEffects.filter(c => isMagicSpendEffect(c?.effectId)).length;
-    const handCount = p.hand.filter(c => isMagicSpendEffect(c.effectId)).length;
-    return activeCount + Math.min(3, handCount);
-  }
-
-  private countOpponentMagicSpendThreats() {
-    return this.opponent().activeAreaEffects.filter(c => isMagicSpendEffect(c?.effectId)).length;
-  }
-
-  private getDefensePressureScore(p = this.currentPlayer()) {
-    const incomingNormal = this.estimateIncomingNormalDamageAfterDefense(p);
-    const incomingPiercing = this.estimateIncomingPiercingDamage();
-    const lowHpBonus = p.hp <= 3 ? 3 : p.hp <= 5 ? 2 : p.hp <= 8 ? 1 : 0;
-    return incomingNormal + incomingPiercing * 0.75 + lowHpBonus;
-  }
-
-  private getMagicNeedScore(p = this.currentPlayer()) {
-    if (this.isMirageActive()) return 0;
-    const spendCount = this.countMagicSpendCards(p);
-    const expensiveActiveCount = p.activeAreaEffects.filter(c => {
-      const eff = c?.effectId;
-      return eff === 'flare' || eff === 'forest' || eff === 'barrier' || eff === 'soul_snatch' || eff === 'dodge';
-    }).length;
-    return spendCount + expensiveActiveCount * 1.3;
-  }
-
-  private aiAttrValue(attr: CardAttr, p = this.currentPlayer()) {
-    let weight = AI_ATTR_WEIGHTS[attr.type] || 1;
-    if (attr.type === 'magic') {
-      weight += Math.min(1.25, this.getMagicNeedScore(p) * 0.18);
-      if (this.isMirageActive()) weight *= 0.35;
-    } else if (attr.type === 'defense') {
-      weight += Math.min(1.35, this.getDefensePressureScore(p) * 0.18);
-      if (p.hp <= 5) weight += 0.35;
-    } else if (attr.type === 'gold') {
-      if (p.hand.length <= 1) weight += 0.35;
-      if (p.board.flat().length >= 6) weight -= 0.15;
-    }
-    return weight * attr.value;
-  }
-
-  private areaAttrPotential(areaIdx: number, type: CardAttr['type'], p = this.currentPlayer()) {
-    let total = 0;
-    ([areaIdx * 2 + 1, areaIdx * 2 + 2] as const).forEach(dieValue => {
-      const base = getBaseAttrForDie(this.currentPlayerIndex, dieValue);
-      if (base.type === type) total += base.value;
-    });
-    p.board[areaIdx].forEach(card => {
-      if (card.left.type === type) total += card.left.value;
-      if (card.right.type === type) total += card.right.value;
-    });
-    return total;
-  }
-
-  private averageAreaDieValue(areaIdx: number, p = this.currentPlayer()) {
-    const values = [areaIdx * 2 + 1, areaIdx * 2 + 2];
-    return values.reduce((sum, dieValue) => {
-      const isLeft = dieValue % 2 !== 0;
-      const base = getBaseAttrForDie(this.currentPlayerIndex, dieValue);
-      let score = this.aiAttrValue(base, p);
-      p.board[areaIdx].forEach(card => {
-        score += this.aiAttrValue(isLeft ? card.left : card.right, p);
-      });
-      return sum + score;
-    }, 0) / values.length;
-  }
-
-  private getStrongestIncomingAttack() {
-    return Math.max(0, ...this.opponent().attackQueue.flat());
-  }
-
-  private getAreaIndexForEffect(p: PlayerState, effectId: string) {
-    return p.activeAreaEffects.findIndex((_, i) => this.getEffectiveEffectId(p, i) === effectId);
-  }
-
   private resetTurnState(p: PlayerState) {
     p.cardsPlayedThisTurn = 0;
     p.chargeUsedIndices = [];
@@ -660,476 +496,54 @@ export class SimulationGame {
     p.defense = 0;
   }
 
-  private getAreaDiceCounts() {
-    const counts = [0, 0, 0];
-    this.diceResults.forEach(v => counts[Math.floor((v - 1) / 2)]++);
-    return counts;
-  }
-
-  private estimateDieValueForCurrentPlayer(dieValue: number) {
-    const p = this.currentPlayer();
-    const areaIdx = Math.floor((dieValue - 1) / 2);
-    const isLeft = dieValue % 2 !== 0;
-    const base = getBaseAttrForDie(this.currentPlayerIndex, dieValue);
-    let score = this.aiAttrValue(base, p);
-    p.board[areaIdx].forEach(card => {
-      score += this.aiAttrValue(isLeft ? card.left : card.right, p);
-    });
-    const eff = this.getEffectiveEffectId(p, areaIdx);
-    if (eff === 'brilliance') score += 1.5;
-    if (eff === 'gale') score += 1;
-    if (eff === 'surge' && base.type === 'magic') score += 1.5;
-    return score;
+  private adeptHeuristic() {
+    return new AdeptHeuristic({
+      players: this.players,
+      currentPlayerIndex: this.currentPlayerIndex,
+      currentPhaseIndex: this.currentPhaseIndex,
+      diceResults: this.diceResults,
+    }, rng);
   }
 
   private chooseLowestValueDieIndex() {
-    const counts = this.getAreaDiceCounts();
-    const p = this.currentPlayer();
-    const scored = this.diceResults.map((v, idx) => {
-      const areaIdx = Math.floor((v - 1) / 2);
-      let score = this.estimateDieValueForCurrentPlayer(v);
-      if (this.getEffectiveEffectId(p, areaIdx) === 'shadow' && counts[areaIdx] === 1) score -= 5;
-      return {idx, score};
-    });
-    const minScore = Math.min(...scored.map(x => x.score));
-    return chooseUniform(scored.filter(x => x.score === minScore)).idx;
+    return this.adeptHeuristic().chooseLowestValueDieIndex();
   }
 
-  private chooseExpertFateDiceIndices() {
-    const p = this.currentPlayer();
-    const counts = this.getAreaDiceCounts();
-    const scored = this.diceResults.map((v, idx) => ({
-      idx,
-      areaIdx: Math.floor((v - 1) / 2),
-      score: this.estimateDieValueForCurrentPlayer(v),
-    }));
-    if (scored.length === 0) return [];
-
-    const shadowAreaIdx = this.getAreaIndexForEffect(p, 'shadow');
-    if (shadowAreaIdx >= 0 && counts[shadowAreaIdx] > 0 && counts[shadowAreaIdx] <= 2) {
-      return scored.filter(x => x.areaIdx === shadowAreaIdx).map(x => x.idx);
-    }
-
-    const brillianceAreaIdx = this.getAreaIndexForEffect(p, 'brilliance');
-    if (brillianceAreaIdx >= 0 && counts[brillianceAreaIdx] === 2) {
-      const outside = scored
-        .filter(x => x.areaIdx !== brillianceAreaIdx)
-        .sort((a, b) => a.score - b.score);
-      if (outside.length > 0) return outside.slice(0, Math.min(2, outside.length)).map(x => x.idx);
-    }
-
-    const avg = scored.reduce((sum, x) => sum + x.score, 0) / scored.length;
-    const chosen = scored
-      .filter(x => x.score < Math.max(2.4, avg * 0.82))
-      .map(x => x.idx);
-    if (chosen.length > 0) return chosen;
-    const minScore = Math.min(...scored.map(x => x.score));
-    return [chooseUniform(scored.filter(x => x.score === minScore)).idx];
+  private chooseAdeptFateDiceIndices() {
+    return this.adeptHeuristic().chooseFateDiceIndices();
   }
 
-  private chooseExpertFrostDieIndex() {
-    const p = this.currentPlayer();
-    const counts = this.getAreaDiceCounts();
-    const scored = this.diceResults.map((v, idx) => {
-      const areaIdx = Math.floor((v - 1) / 2);
-      let score = this.estimateDieValueForCurrentPlayer(v);
-      if (this.getEffectiveEffectId(p, areaIdx) === 'shadow' && counts[areaIdx] === 1) score -= 8;
-      return {idx, score};
-    });
-    const minScore = Math.min(...scored.map(x => x.score));
-    return chooseUniform(scored.filter(x => x.score === minScore)).idx;
+  private chooseAdeptFrostDieIndex() {
+    return this.adeptHeuristic().chooseFrostDieIndex();
   }
 
-  private chooseExpertIllusionTargetArea() {
-    const candidates: Array<{areaIdx: number; score: number}> = [];
-    this.opponent().activeAreaEffects.forEach((c, areaIdx) => {
-      if (!c || ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId)) return;
-      candidates.push({areaIdx, score: aiEffectWeight(c.effectId)});
-    });
-    if (candidates.length === 0) return -1;
-    const maxScore = Math.max(...candidates.map(c => c.score));
-    return chooseUniform(candidates.filter(c => c.score === maxScore)).areaIdx;
+  private chooseAdeptIllusionTargetArea() {
+    return this.adeptHeuristic().chooseIllusionTargetArea();
   }
 
-  private scoreCardForExpert(card: GameCard, areaIdx = -1) {
-    const p = this.currentPlayer();
-    const defensePressure = this.getDefensePressureScore(p);
-    const magicNeed = this.getMagicNeedScore(p);
-    const mirageActive = this.isMirageActive();
-    const currentEff = areaIdx >= 0 ? this.getEffectiveEffectId(p, areaIdx) : null;
-    const coveringOwnMirage = currentEff === 'mirage' && card.effectId !== 'mirage';
-    const hasBrilliance = this.hasExpertEffect(p, 'brilliance') || card.effectId === 'brilliance';
-    const hasShadow = this.hasExpertEffect(p, 'shadow') || card.effectId === 'shadow';
-    const comboEffects = ['charge', 'reproduction', 'flare', 'forest', 'amplify', 'thrust', 'magic_bullet'];
-    const attackComboCount = this.countHandEffects(p, comboEffects)
-      + p.activeAreaEffects.filter(c => comboEffects.includes(c?.effectId || '')).length;
-    const attackAttrValue = card.left.type === 'attack' ? card.left.value : 0;
-    const attackAttrRight = card.right.type === 'attack' ? card.right.value : 0;
-    let score = aiEffectWeight(card.effectId) + this.aiAttrValue(card.left, p) + this.aiAttrValue(card.right, p);
-
-    if (isMagicSpendEffect(card.effectId)) {
-      score += Math.min(3.4, magicNeed * 0.42);
-      if (mirageActive && !coveringOwnMirage) score -= 5.5;
-      if (coveringOwnMirage) score += 3 + Math.min(3, this.countMagicSpendCards(p) * 0.55);
-    }
-
-    if (card.effectId === 'diversion') {
-      score += magicNeed >= 2 && !mirageActive ? Math.min(5.2, magicNeed * 0.9) : -2.4;
-      if (attackComboCount >= 2) score += 1.1;
-    }
-    if (card.effectId === 'mirage') {
-      score += this.countOpponentMagicSpendThreats() * 1.9;
-      score -= this.countMagicSpendCards(p) * 0.85;
-      if (magicNeed >= 3) score -= 2.2;
-      if (defensePressure >= 4) score += 1.2;
-    }
-    if (card.effectId === 'brilliance') {
-      const diceSupport = (this.hasHandEffect(p, 'fate') ? 1.2 : 0)
-        + (this.hasHandEffect(p, 'magic_luck') ? 1.3 : 0)
-        + (this.hasHandEffect(p, 'lucky') ? 0.8 : 0)
-        + (this.hasExpertEffect(p, 'fate') ? 1.4 : 0)
-        + (this.hasExpertEffect(p, 'magic_luck') ? 1.5 : 0)
-        + (this.hasExpertEffect(p, 'lucky') ? 0.8 : 0);
-      score += diceSupport;
-      if (this.hasExpertEffect(p, 'shadow')) score -= 0.7;
-    }
-    if (card.effectId === 'shadow') {
-      score += (this.hasExpertEffect(p, 'frost') || this.hasHandEffect(p, 'frost')) ? 3.2 : 0;
-      score += (this.hasExpertEffect(p, 'fate') || this.hasHandEffect(p, 'fate')) ? 1.4 : 0;
-      score += (this.hasExpertEffect(p, 'lucky') || this.hasHandEffect(p, 'lucky')) ? 0.8 : 0;
-      if (this.hasExpertEffect(p, 'brilliance')) score -= 0.6;
-    }
-    if (card.effectId === 'frost') score += hasShadow ? 3.4 : hasBrilliance ? 0.8 : 0.5;
-    if (card.effectId === 'fate') score += hasBrilliance ? 2.3 : hasShadow ? 1.6 : 0.4;
-    if (card.effectId === 'magic_luck') {
-      score += hasBrilliance ? 3.1 : 0.4;
-      if (this.hasExpertEffect(p, 'shadow') && !hasBrilliance) score -= 1.2;
-      if (magicNeed >= 4) score -= 0.8;
-    }
-    if (card.effectId === 'lucky') score += hasShadow ? 1.1 : hasBrilliance ? 0.9 : 0;
-
-    if (card.effectId === 'holy_light') score += p.hp <= 4 ? 3.4 : p.hp <= 7 ? 1.8 : 0.3;
-    if (card.effectId === 'contract') score += p.hp <= 5 ? 3.2 : p.hp <= 8 ? 1.2 : 0;
-    if (card.effectId === 'breakthrough') score += p.hp <= 4 ? 3.8 : p.hp <= 6 ? 1.2 : 0;
-    if (card.effectId === 'dodge') score += this.getStrongestIncomingAttack() >= 4 ? 3.2 : defensePressure >= 3 ? 1.7 : 0;
-    if (card.effectId === 'barrier') score += defensePressure >= 4 ? 2.8 : defensePressure >= 2 ? 1.1 : 0;
-    if (card.effectId === 'shield') score += defensePressure >= 3 ? 1.7 : 0.2;
-    if (card.effectId === 'backfire') score += defensePressure >= 2 ? 1.5 : 0.4;
-
-    if (card.effectId === 'magic_bullet') score += (this.hasExpertEffect(p, 'thrust') || this.hasHandEffect(p, 'thrust') ? 1.8 : 0)
-      + (this.hasExpertEffect(p, 'forest') || this.hasHandEffect(p, 'forest') ? 1.4 : 0)
-      + (this.hasExpertEffect(p, 'amplify') || this.hasHandEffect(p, 'amplify') ? 0.9 : 0);
-    if (card.effectId === 'thrust') score += (this.hasExpertEffect(p, 'magic_bullet') || this.hasHandEffect(p, 'magic_bullet') ? 2.2 : 0)
-      + (attackAttrValue + attackAttrRight >= 1 ? 0.7 : 0);
-    if (card.effectId === 'amplify') score += attackComboCount >= 2 ? 1.5 : 0.5;
-    if (card.effectId === 'forest') score += attackComboCount >= 2 ? 2.2 : 0.7;
-    if (card.effectId === 'charge') score += attackComboCount >= 1 ? 1.1 : 0.2;
-    if (card.effectId === 'flare') score += (this.hasExpertEffect(p, 'charge') || this.hasHandEffect(p, 'charge') ? 1.1 : 0)
-      + (this.hasExpertEffect(p, 'reproduction') || this.hasHandEffect(p, 'reproduction') ? 1.3 : 0);
-    if (card.effectId === 'reproduction') score += (this.hasExpertEffect(p, 'flare') || this.hasHandEffect(p, 'flare') ? 1.6 : 0)
-      + (this.hasExpertEffect(p, 'forest') || this.hasHandEffect(p, 'forest') ? 1 : 0);
-    if (card.effectId === 'surge') score += magicNeed >= 3 ? 1.5 : 0.3;
-    if (card.effectId === 'flame_shield') score += defensePressure >= 3 ? 1.3 : 0.4;
-    if (card.effectId === 'gale' || card.effectId === 'ambush') score += this.opponent().hp <= 5 ? 1.1 : 0.4;
-    if (card.effectId === 'illusion') {
-      const targetArea = this.chooseExpertIllusionTargetArea();
-      score += targetArea >= 0 ? aiEffectWeight(this.opponent().activeAreaEffects[targetArea]?.effectId) * 0.5 : -2.5;
-    }
-
-    if (areaIdx >= 0) {
-      score -= aiEffectWeight(currentEff) * 0.35;
-      if (card.effectId === currentEff) score -= 2;
-      if (currentEff === 'shadow' && card.effectId !== 'shadow' && !this.hasExpertEffect(p, 'brilliance')) score -= 1.4;
-      if (card.effectId === 'brilliance') {
-        const areaValue = this.averageAreaDieValue(areaIdx, p);
-        score += areaValue >= 4 ? 1.1 : 0.4;
-      }
-      if (card.effectId === 'shadow') {
-        const areaValue = this.averageAreaDieValue(areaIdx, p);
-        score += areaValue <= 3.2 ? 1.2 : -0.3;
-      }
-      if (card.effectId === 'surge') score += this.areaAttrPotential(areaIdx, 'magic', p) * 0.35;
-      if (card.effectId === 'flame_shield') score += this.areaAttrPotential(areaIdx, 'defense', p) * 0.35;
-    }
-
-    return score;
+  private scoreCardForAdept(card: GameCard, areaIdx = -1) {
+    return this.adeptHeuristic().scoreCard(card, areaIdx);
   }
 
-  private chooseExpertPlay() {
-    const p = this.currentPlayer();
-    if (p.hand.length === 0) return null;
-    let best: {handIdx: number; areaIdx: number; score: number} | null = null;
-    p.hand.forEach((card, handIdx) => {
-      for (let areaIdx = 0; areaIdx < 3; areaIdx++) {
-        const score = this.scoreCardForExpert(card, areaIdx) + rng() * 0.15;
-        if (!best || score > best.score) best = {handIdx, areaIdx, score};
-      }
-    });
-    return best;
+  private chooseAdeptPlay() {
+    return this.adeptHeuristic().choosePlay();
   }
 
-  private chooseExpertPlayCount() {
-    const p = this.currentPlayer();
-    if (p.hand.length <= 1) return 1;
-    const bestHandScore = Math.max(...p.hand.map(c => this.scoreCardForExpert(c)));
-    const activeBrilliance = this.hasExpertEffect(p, 'brilliance');
-    const activeShadow = this.hasExpertEffect(p, 'shadow');
-    if (activeBrilliance && !activeShadow) return 1;
-    if (activeShadow && !activeBrilliance && p.hand.length >= 5) return 2;
-    if (p.hand.length >= 5 && bestHandScore >= 7.5) return 3;
-    if (p.hand.length >= 3 && bestHandScore >= 8.2) return 2;
-    if (p.cardsPlayedThisTurn === 0 && p.board.flat().length < 3) return Math.min(2, p.hand.length);
-    return 1;
+  private chooseAdeptPlayCount() {
+    return this.adeptHeuristic().choosePlayCount();
   }
 
-  private averageDieScoreForCurrentPlayer() {
-    let total = 0;
-    for (let dieValue = 1; dieValue <= 6; dieValue++) {
-      total += this.estimateDieValueForCurrentPlayer(dieValue);
-    }
-    return total / 6;
+  private chooseAdeptRollCount(rollOptions: number[]) {
+    return this.adeptHeuristic().chooseRollCount(rollOptions);
   }
 
-  private chooseExpertRollCount(rollOptions: number[]) {
-    if (rollOptions.length <= 1) return rollOptions[0];
-
-    const p = this.currentPlayer();
-    const areaIndices = [0, 1, 2] as const;
-    const shadowAreas = areaIndices.filter(i => this.getEffectiveEffectId(p, i) === 'shadow').length;
-    const brillianceAreas = areaIndices.filter(i => this.getEffectiveEffectId(p, i) === 'brilliance').length;
-    const avgDieScore = this.averageDieScoreForCurrentPlayer();
-    const attackWeight = AI_ATTR_WEIGHTS.attack;
-
-    const scored = rollOptions.map(count => {
-      // More dice means more attribute income.
-      let score = count * avgDieScore;
-      // Shadow only triggers on an EMPTY area, so fewer dice make it more likely.
-      if (shadowAreas > 0) {
-        score += shadowAreas * SHADOW_PIERCING_DAMAGE * attackWeight * PIERCING_DAMAGE_MULTIPLIER
-          * Math.pow(1 - DIE_AREA_PROBABILITY, count);
-      }
-      // Brilliance needs 3+ dice in one area, so more dice make it more likely.
-      if (brillianceAreas > 0) {
-        score += brillianceAreas * BRILLIANCE_ATTACK_BONUS * attackWeight
-          * binomialProbAtLeast(BRILLIANCE_DICE_REQUIRED, count, DIE_AREA_PROBABILITY);
-      }
-      return {count, score};
-    });
-
-    const maxScore = Math.max(...scored.map(s => s.score));
-    return chooseUniform(scored.filter(s => s.score === maxScore)).count;
-  }
-
-  private estimateIncomingNormalDamageAfterDefense(p = this.currentPlayer()) {
-    return this.opponent().attackQueue.flat().reduce((sum, atk) => sum + Math.max(0, atk - p.defense), 0);
-  }
-
-  private estimateIncomingPiercingDamage() {
-    return this.opponent().piercingQueue.flat().reduce((sum, atk) => sum + atk, 0);
-  }
-
-  private getExpertMagicCost(effectId: string) {
-    if (effectId === 'magic_bullet' || effectId === 'illusion') return 1;
-    if (effectId === 'charge' || effectId === 'reproduction' || effectId === 'shield' || effectId === 'holy_light' || effectId === 'magic_luck') return 2;
-    if (effectId === 'flare' || effectId === 'forest' || effectId === 'dodge' || effectId === 'barrier' || effectId === 'soul_snatch') return 3;
-    return 0;
-  }
-
-  private buildExpertMagicPlan() {
-    const p = this.currentPlayer();
-    const planned: Record<string, number> = {};
-    if (p.magic <= 0 || this.isMirageActive()) return {planned, reserved: 0};
-
-    const candidates: Array<{effectId: string; cost: number; score: number; priority: number}> = [];
-    const canPlanPhase = (phase: number) => this.currentPhaseIndex <= phase;
-    const add = (effectId: string, score: number, priority = 0, uses = 1, decay = 1.15) => {
-      const cost = this.getExpertMagicCost(effectId);
-      if (cost <= 0 || score < 2.75) return;
-      for (let i = 0; i < uses; i++) {
-        candidates.push({effectId, cost, score: Math.max(0, score - i * decay), priority});
-      }
-    };
-
-    if (canPlanPhase(2)) {
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'magic_luck' && !p.magicLuckUsedIndices.includes(i))) {
-        add('magic_luck', this.scoreActivationForExpertRaw('magic_luck'), 5);
-      }
-      if (p.activeAreaEffects.some((c, i) => c?.effectId === 'illusion' && !p.illusionUsedIndices.includes(i)) && this.chooseExpertIllusionTargetArea() >= 0) {
-        add('illusion', this.scoreActivationForExpertRaw('illusion'), 4);
-      }
-    }
-
-    if (canPlanPhase(3)) {
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'dodge' && !p.evasionUsedIndices.includes(i)) && this.listOpponentDodgeTargets().length > 0) {
-        add('dodge', this.scoreActivationForExpertRaw('dodge'), 8);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'barrier' && !p.barrierUsedIndices.includes(i))) {
-        add('barrier', this.scoreActivationForExpertRaw('barrier'), 7);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'shield')) {
-        const incoming = Math.max(0, this.estimateIncomingNormalDamageAfterDefense(p));
-        add('shield', this.scoreActivationForExpertRaw('shield'), 6, Math.min(2, Math.ceil(incoming)));
-      }
-    }
-
-    if (canPlanPhase(5)) {
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'soul_snatch')) {
-        const uses = Math.min(3, Math.ceil(Math.max(1, this.opponent().hp) / 2));
-        add('soul_snatch', this.scoreActivationForExpertRaw('soul_snatch'), 6, uses);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'holy_light')) {
-        const hpNeed = p.hp <= 7 ? 2 : 1;
-        add('holy_light', Math.max(this.scoreActivationForExpertRaw('holy_light'), this.currentPhaseIndex >= 4 ? 3.2 : 1), 2, hpNeed);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'magic_bullet')) {
-        add('magic_bullet', this.scoreActivationForExpertRaw('magic_bullet'), 3, Math.min(4, p.magic), 4.6);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'forest' && !p.forestUsedIndices.includes(i)) && this.hasAnyAttackTarget(p)) {
-        add('forest', this.scoreActivationForExpertRaw('forest'), 5);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'flare' && !p.flareUsedIndices.includes(i)) && this.hasAnyAttackTarget(p)) {
-        add('flare', this.scoreActivationForExpertRaw('flare'), 5);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'reproduction' && !p.reproductionUsedIndices.includes(i)) && this.hasAnyAttackTarget(p)) {
-        add('reproduction', this.scoreActivationForExpertRaw('reproduction'), 4);
-      }
-      if (p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'charge' && !p.chargeUsedIndices.includes(i)) && this.hasAnyAttackTarget(p)) {
-        add('charge', this.scoreActivationForExpertRaw('charge'), 4);
-      }
-    }
-
-    candidates.sort((a, b) => {
-      const ar = a.score / a.cost + a.score * 0.08 + a.priority * 0.12;
-      const br = b.score / b.cost + b.score * 0.08 + b.priority * 0.12;
-      return br - ar;
-    });
-
-    let remaining = p.magic;
-    for (const candidate of candidates) {
-      if (candidate.cost > remaining) continue;
-      planned[candidate.effectId] = (planned[candidate.effectId] || 0) + 1;
-      remaining -= candidate.cost;
-    }
-
-    return {planned, reserved: p.magic - remaining};
-  }
-
-  private scoreActivationForExpert(label: string) {
-    const raw = this.scoreActivationForExpertRaw(label);
-    const cost = this.getExpertMagicCost(label);
-    if (cost <= 0) return raw;
-
-    const plan = this.buildExpertMagicPlan();
-    if ((plan.planned[label] || 0) > 0) return raw + 0.35;
-
-    if (this.currentPhaseIndex >= 5 && raw >= 3.2 && this.currentPlayer().magic >= cost) {
-      return Math.max(2.85, raw * 0.72);
-    }
-    return Math.min(raw, 2.35);
-  }
-
-  private scoreActivationForExpertRaw(label: string) {
-    const p = this.currentPlayer();
-    const opp = this.opponent();
-    const maxSelfAttack = Math.max(0, ...this.listSelfAttackTargets().map(t => t.val));
-    const totalSelfAttack = p.currentAttacks.flat().reduce((a, b) => a + Math.max(0, b), 0);
-    const selfAttackCount = this.listSelfAttackTargets().length;
-    const thrustTargetCount = p.currentAttacks.flat().filter(v => v > 0 && v <= 2).length;
-    const incomingNormal = this.estimateIncomingNormalDamageAfterDefense(p);
-    const incomingPiercing = this.estimateIncomingPiercingDamage();
-    const hasUnusedThrust = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'thrust' && !p.thrustUsedIndices.includes(i));
-    const hasUnusedAmplify = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'amplify' && !p.amplifyUsedIndices.includes(i));
-    const hasUnusedForest = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'forest' && !p.forestUsedIndices.includes(i));
-    const hasUnusedCharge = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'charge' && !p.chargeUsedIndices.includes(i));
-    const hasUnusedReproduction = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'reproduction' && !p.reproductionUsedIndices.includes(i));
-    const hasUnusedFlare = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'flare' && !p.flareUsedIndices.includes(i));
-    const hasMagicBullet = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'magic_bullet');
-    const expensiveAttackFinisherWaiting = maxSelfAttack > 0 && (hasUnusedForest || hasUnusedCharge || hasUnusedReproduction || hasUnusedFlare);
-    const reserveMagicForFinisher = expensiveAttackFinisherWaiting ? (hasUnusedFlare || hasUnusedForest ? 3 : 2) : 0;
-    const canPreloadMagicBullet = hasMagicBullet && p.magic > reserveMagicForFinisher;
-
-    if (label === 'soul_snatch') {
-      if (opp.hp <= 1) return 20;
-      return 7 + (opp.hp <= 3 ? 4 : 0) + (p.hp <= 4 ? 2.5 : p.hp <= 7 ? 1 : 0);
-    }
-    if (label === 'holy_light') return p.hp <= 4 ? 9 : p.hp <= 7 ? 5.2 : p.hp <= 10 && incomingNormal + incomingPiercing > 0 ? 3.2 : 1.2;
-    if (label === 'dodge') {
-      const strongest = Math.max(0, ...this.listOpponentDodgeTargets().map(t => t.val));
-      const prevent = Math.max(0, strongest - p.defense);
-      return prevent >= 4 || incomingNormal >= 4 ? 10 + strongest : prevent >= 2 || incomingNormal >= 2 ? 7 + prevent : 1.8;
-    }
-    if (label === 'barrier') return incomingNormal >= 4 ? 9 + incomingNormal : incomingNormal >= 2 ? 6.5 : 1.2;
-    if (label === 'shield') return incomingNormal >= 2 ? 5.5 + incomingNormal : incomingNormal === 1 && p.hp <= 5 ? 3.5 : 1;
-    if (label === 'forest') {
-      if (canPreloadMagicBullet && p.magic > 3) return 2.6;
-      if (hasUnusedThrust && thrustTargetCount > 0) return 2.2;
-      if (hasUnusedAmplify && selfAttackCount >= 2) return 2.4;
-      return selfAttackCount >= 2 && totalSelfAttack >= 5 ? 9.4 + totalSelfAttack * 0.25 : selfAttackCount >= 2 ? 5.2 : 1.4;
-    }
-    if (label === 'flare') {
-      if (canPreloadMagicBullet && p.magic > 3) return 2.7;
-      if (hasUnusedForest && selfAttackCount >= 2 && totalSelfAttack > maxSelfAttack) return 2.4;
-      if (hasUnusedCharge && p.magic >= 5 && maxSelfAttack <= 5) return 2.5;
-      return maxSelfAttack >= 5 ? 10 + maxSelfAttack * 0.35 : maxSelfAttack >= 3 ? 7.8 + maxSelfAttack * 0.2 : 2;
-    }
-    if (label === 'charge') {
-      if (canPreloadMagicBullet && p.magic > 2) return 2.7;
-      if (hasUnusedForest && selfAttackCount >= 2 && totalSelfAttack > maxSelfAttack) return 2.5;
-      return maxSelfAttack >= 4 ? 8.6 + maxSelfAttack * 0.2 : maxSelfAttack >= 1 ? 6.4 : 1.5;
-    }
-    if (label === 'reproduction') {
-      if (canPreloadMagicBullet && p.magic > 2) return 2.7;
-      if (hasUnusedForest && selfAttackCount >= 2 && totalSelfAttack > maxSelfAttack) return 2.5;
-      if (hasUnusedFlare && p.magic >= 5 && maxSelfAttack >= 3) return 2.6;
-      return maxSelfAttack >= 5 ? 9.6 + maxSelfAttack * 0.28 : maxSelfAttack >= 2 ? 7.5 + maxSelfAttack * 0.2 : 2.2;
-    }
-    if (label === 'magic_bullet') {
-      const reserveMagic = reserveMagicForFinisher;
-      if (p.magic <= reserveMagic && !(hasUnusedThrust && p.magic > 0)) return 1.6;
-      return 12
-        + (hasUnusedThrust ? 4.6 : 0)
-        + (hasUnusedAmplify ? 1.1 : 0)
-        + (hasUnusedForest ? 1.1 : 0)
-        + (p.magic > reserveMagic + 1 ? 0.7 : 0);
-    }
-    if (label === 'amplify') {
-      if (canPreloadMagicBullet && p.magic > reserveMagicForFinisher) return 2.6;
-      if (hasUnusedThrust && thrustTargetCount > 0) return 2.4;
-      return selfAttackCount >= 2 ? 9.2 + selfAttackCount : selfAttackCount === 1 ? 6.2 : 1;
-    }
-    if (label === 'thrust') {
-      return thrustTargetCount >= 2 ? 10 + thrustTargetCount : thrustTargetCount === 1 ? 7.2 : 0;
-    }
-    if (label === 'fate') {
-      const rerollCount = this.chooseExpertFateDiceIndices().length;
-      const counts = this.getAreaDiceCounts();
-      const brillianceAlmost = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'brilliance' && counts[i] === 2);
-      const shadowBlocked = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'shadow' && counts[i] > 0 && counts[i] <= 2);
-      return brillianceAlmost || shadowBlocked ? 8.2 : rerollCount >= 2 ? 6.5 : 3.4;
-    }
-    if (label === 'magic_luck') {
-      const counts = this.getAreaDiceCounts();
-      const brillianceAlmost = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'brilliance' && counts[i] === 2);
-      const hasBrilliance = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'brilliance');
-      const hasShadow = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'shadow');
-      return brillianceAlmost ? 8 : hasBrilliance && !hasShadow ? 5.2 : hasShadow ? 1.5 : 3;
-    }
-    if (label === 'frost') {
-      const hasShadow = p.activeAreaEffects.some((_, i) => this.getEffectiveEffectId(p, i) === 'shadow');
-      if (hasShadow) return 8.6;
-      const lowest = this.diceResults.length > 0 ? Math.min(...this.diceResults.map(v => this.estimateDieValueForCurrentPlayer(v))) : 99;
-      return lowest <= 2.5 ? 4.6 : 2.4;
-    }
-    if (label === 'illusion') {
-      const target = this.chooseExpertIllusionTargetArea();
-      return target >= 0 ? 5 + aiEffectWeight(this.opponent().activeAreaEffects[target]?.effectId) : 0;
-    }
-    return 3;
+  private scoreActivationForAdept(effectId: string) {
+    return this.adeptHeuristic().scoreActivation(effectId);
   }
 
   private aiPlayPhase() {
-    if (this.usesExpertHeuristics()) {
-      return this.expertPlayPhase();
+    if (this.usesAdeptHeuristics()) {
+      return this.adeptPlayPhase();
     }
 
     this.currentPhaseIndex = 0;
@@ -1150,7 +564,7 @@ export class SimulationGame {
     this.currentPhaseIndex = 1;
   }
 
-  private expertPlayPhase() {
+  private adeptPlayPhase() {
     this.currentPhaseIndex = 0;
     const p = this.currentPlayer();
     if (p.hand.length === 0) {
@@ -1160,9 +574,9 @@ export class SimulationGame {
     }
 
     const maxPlays = Math.min(3, p.hand.length);
-    const playCount = Math.min(maxPlays, Math.max(1, this.chooseExpertPlayCount()));
+    const playCount = Math.min(maxPlays, Math.max(1, this.chooseAdeptPlayCount()));
     for (let i = 0; i < playCount && p.hand.length > 0; i++) {
-      const choice = this.chooseExpertPlay();
+      const choice = this.chooseAdeptPlay();
       if (!choice) break;
       this.playCard(choice.handIdx, choice.areaIdx);
     }
@@ -1185,7 +599,7 @@ export class SimulationGame {
     const rollOptions = shouldRollFiveBecauseNoHand
       ? [5]
       : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
-    const count = this.usesExpertHeuristics() ? this.chooseExpertRollCount(rollOptions) : chooseUniform(rollOptions);
+    const count = this.usesAdeptHeuristics() ? this.chooseAdeptRollCount(rollOptions) : chooseUniform(rollOptions);
     this.rollDice(count);
   }
 
@@ -1198,14 +612,14 @@ export class SimulationGame {
     const finalCount = luckyIdx !== -1 ? count + 1 : count;
     this.diceResults = Array.from({length: finalCount}, () => randInt(1, 6));
     if (luckyIdx !== -1 && this.diceResults.length > 0) {
-      const idx = this.banditPicksTargets()
+      const idx = this.expertPicksTargets()
         ? banditChooseTarget(
             this,
             this.diceResults.map((_, i) => i),
             (clone, i) => clone.diceResults.splice(i, 1),
             this.currentBanditConfig().targetBudget,
           )
-        : this.usesExpertHeuristics()
+        : this.usesAdeptHeuristics()
           ? this.chooseLowestValueDieIndex()
           : randInt(0, this.diceResults.length - 1);
       this.diceResults.splice(idx, 1);
@@ -1281,9 +695,9 @@ export class SimulationGame {
     for (let i = 0; i < 200 && this.winner === null; i++) {
       const acts = this.availableActivations();
       if (acts.length === 0) return;
-      if (this.usesExpertHeuristics()) {
+      if (this.usesAdeptHeuristics()) {
         const scored = acts
-          .map(act => ({act, score: this.scoreActivationForExpert(act.label) + rng() * 0.1}))
+          .map(act => ({act, score: this.scoreActivationForAdept(act.effectId) + rng() * 0.1}))
           .filter(x => x.score >= 2.75);
         if (scored.length === 0) return;
         this.pickScored(scored).act.run();
@@ -1348,7 +762,7 @@ export class SimulationGame {
     const p = this.currentPlayer();
     if (p.fateUsedIndices.includes(areaIdx) || this.diceResults.length === 0) return;
     let indices: number[];
-    if (this.banditPicksTargets()) {
+    if (this.expertPicksTargets()) {
       // 重擲哪些骰子交給模擬決定；apply 必須和下面真實套用的兩行一致
       indices = banditChooseTarget(
         this,
@@ -1360,8 +774,8 @@ export class SimulationGame {
         this.currentBanditConfig().targetBudget,
         this.currentBanditConfig().fateLadder,
       );
-    } else if (this.usesExpertHeuristics()) {
-      indices = this.chooseExpertFateDiceIndices();
+    } else if (this.usesAdeptHeuristics()) {
+      indices = this.chooseAdeptFateDiceIndices();
     } else {
       const n = this.diceResults.length;
       const k = randInt(1, n);
@@ -1376,15 +790,15 @@ export class SimulationGame {
   private useFrost(areaIdx: number) {
     const p = this.currentPlayer();
     if (p.frostUsedIndices.includes(areaIdx) || this.diceResults.length === 0) return;
-    const dieIdx = this.banditPicksTargets()
+    const dieIdx = this.expertPicksTargets()
       ? banditChooseTarget(
           this,
           this.diceResults.map((_, i) => i),
           (clone, i) => applyFrost(clone.currentPlayer(), areaIdx, clone.diceResults, i, rng),
           this.currentBanditConfig().targetBudget,
         )
-      : this.usesExpertHeuristics()
-        ? this.chooseExpertFrostDieIndex()
+      : this.usesAdeptHeuristics()
+        ? this.chooseAdeptFrostDieIndex()
         : randInt(0, this.diceResults.length - 1);
     applyFrost(p, areaIdx, this.diceResults, dieIdx, rng);
   }
@@ -1402,7 +816,7 @@ export class SimulationGame {
       if (c && !ILLUSION_UNCOPYABLE_EFFECT_IDS.has(c.effectId)) candidates.push(idx);
     });
     if (p.magic < 1 || candidates.length === 0) return;
-    const oppAreaIdx = this.banditPicksTargets()
+    const oppAreaIdx = this.expertPicksTargets()
       ? banditChooseTarget(
           this,
           candidates,
@@ -1412,8 +826,8 @@ export class SimulationGame {
           },
           this.currentBanditConfig().targetBudget,
         )
-      : this.usesExpertHeuristics()
-        ? this.chooseExpertIllusionTargetArea()
+      : this.usesAdeptHeuristics()
+        ? this.chooseAdeptIllusionTargetArea()
         : chooseUniform(candidates);
     const targetCard = this.opponent().activeAreaEffects[oppAreaIdx];
     if (!targetCard) return;
@@ -1426,7 +840,7 @@ export class SimulationGame {
     const opp = this.opponent();
     const targets = this.listOpponentDodgeTargets();
     if (p.magic < 3 || targets.length === 0) return;
-    const target = this.usesExpertHeuristics()
+    const target = this.usesAdeptHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyEvasion(p, opp, areaIdx, target.areaIdx, target.hitIdx);
@@ -1461,7 +875,7 @@ export class SimulationGame {
     if (p.chargeUsedIndices.includes(areaIdx) || p.magic < 2) return;
     const targets = this.listSelfAttackTargets();
     if (targets.length === 0) return;
-    const target = this.usesExpertHeuristics()
+    const target = this.usesAdeptHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyCharge(p, areaIdx, target.areaIdx, target.hitIdx);
@@ -1472,7 +886,7 @@ export class SimulationGame {
     if (p.reproductionUsedIndices.includes(areaIdx) || p.magic < 2) return;
     const targets = this.listSelfAttackTargets();
     if (targets.length === 0) return;
-    const target = this.usesExpertHeuristics()
+    const target = this.usesAdeptHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyReproduction(p, areaIdx, target.areaIdx, target.hitIdx);
@@ -1483,7 +897,7 @@ export class SimulationGame {
     if (p.flareUsedIndices.includes(areaIdx) || p.magic < 3) return;
     const targets = this.listSelfAttackTargets();
     if (targets.length === 0) return;
-    const target = this.usesExpertHeuristics()
+    const target = this.usesAdeptHeuristics()
       ? chooseHighestAttackTarget(targets)
       : chooseAiWeightedAttackTarget(targets);
     applyFlare(p, areaIdx, target.areaIdx, target.hitIdx);
@@ -1501,7 +915,7 @@ export class SimulationGame {
 
   private aiBuyPhase() {
     // 專家（bandit）使用勝局出牌率的完整購買方案；高手／一般維持原本邏輯。
-    if (this.currentAiDifficulty() === 'bandit') {
+    if (this.currentAiDifficulty() === 'expert') {
       this.aiBuyPhaseWinningPlay();
       return;
     }
@@ -1518,7 +932,7 @@ export class SimulationGame {
       const nextDrawCost = this.deckDrawCost(nextDrawIndex);
       if (this.deck.length > 0 && Number.isFinite(nextDrawCost) && p.gold >= nextDrawCost) {
         actions.push({
-score: this.usesExpertHeuristics() ? 5.8 - nextDrawCost * 1.1 + rng() * 0.1 : rng(),
+score: this.usesAdeptHeuristics() ? 5.8 - nextDrawCost * 1.1 + rng() * 0.1 : rng(),
 run: () => this.buyFromDeck(),
         });
       }
@@ -1527,15 +941,15 @@ run: () => this.buyFromDeck(),
         const price = this.marketPrice(idx);
         if (c && p.gold >= price) {
 actions.push({
-  score: this.usesExpertHeuristics()
-    ? this.scoreCardForExpert(c) - price * 1.35 + rng() * 0.1
+  score: this.usesAdeptHeuristics()
+    ? this.scoreCardForAdept(c) - price * 1.35 + rng() * 0.1
     : rng(),
   run: () => this.buyMarketCard(idx),
 });
         }
       });
       if (actions.length === 0) return;
-      if (this.usesExpertHeuristics()) {
+      if (this.usesAdeptHeuristics()) {
         this.pickScored(actions).run();
       } else {
         chooseUniform(actions).run();
