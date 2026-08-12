@@ -1,0 +1,67 @@
+name: Grouped preparation A/B
+
+on:
+  push:
+    branches: [agent/expert-preparation-grouped-experiment]
+
+jobs:
+  batch:
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0,1,2,3,4,5,6,7,8,9]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply grouped preparation experiment
+        run: python .github/scripts/grouped_preparation_patch.py
+      - name: Typecheck patched experiment
+        run: npm run lint
+      - name: Run 250 mirror pairs
+        run: npx tsx .github/scripts/grouped_preparation_ab.ts --batch ${{ matrix.batch }} --pairs 250
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grouped-prep-ab-${{ matrix.batch }}
+          path: grouped-ab-${{ matrix.batch }}.json
+
+  aggregate:
+    needs: batch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: grouped-prep-ab-*
+          path: results
+          merge-multiple: true
+      - name: Aggregate 5000 games
+        shell: python
+        run: |
+          import glob, json, math
+          rows = [json.load(open(p)) for p in sorted(glob.glob('results/grouped-ab-*.json'))]
+          keys = ['pairs','games','groupedWins','baselineWins','draws','groupedAsFirstWins','groupedAsSecondWins','firstPlayerWins','totalTurns','groupedSweeps','splits','baselineSweeps']
+          t = {k: sum(r[k] for r in rows) for k in keys}
+          n = t['games'] - t['draws']
+          p = t['groupedWins'] / n
+          z = 1.959963984540054
+          denom = 1 + z*z/n
+          center = (p + z*z/(2*n))/denom
+          half = z*math.sqrt((p*(1-p)+z*z/(4*n))/n)/denom
+          t['groupedWinRate'] = p
+          t['baselineWinRate'] = t['baselineWins']/n
+          t['groupedAsFirstRate'] = t['groupedAsFirstWins']/t['pairs']
+          t['groupedAsSecondRate'] = t['groupedAsSecondWins']/t['pairs']
+          t['firstPlayerWinRate'] = t['firstPlayerWins']/t['games']
+          t['avgTurns'] = t['totalTurns']/t['games']
+          t['wilson95'] = [center-half, center+half]
+          # Exact two-sided sign test on decisive mirror sweeps.
+          a, b = t['groupedSweeps'], t['baselineSweeps']
+          m = a+b
+          lo = min(a,b)
+          prob = sum(math.comb(m,k) for k in range(lo+1)) / (2**m) if m else 1.0
+          t['sweepSignTestP'] = min(1.0, 2*prob)
+          print('FINAL_RESULT=' + json.dumps(t, separators=(',', ':')))
