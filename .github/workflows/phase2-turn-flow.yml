@@ -24,7 +24,9 @@ jobs:
       - name: Capture seeded baseline
         run: npx tsx .github/scripts/turn_flow_seeded_snapshot.ts > /tmp/turn-flow-before.json
       - name: Apply phase two refactor
-        run: python .github/scripts/patch_phase2_turn_flow.py
+        run: |
+          python .github/scripts/patch_phase2_turn_flow.py
+          sed -i "s/if (!transition\.advanced) {/if ('blockReason' in transition) {/g" src/main.ts src/sim/game.ts
       - name: Typecheck
         run: npm run lint
       - name: Build
