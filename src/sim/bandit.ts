@@ -16,7 +16,7 @@ import {makeRng, rng, withRng} from './rng';
  *
  * 分工：
  *   - bandit 只決定「現在這個決策點要選哪個候選」。
- *   - rollout 內部剩下的所有決策一律用現有 expert 啟發式（+15% 隨機）走完。
+ *   - rollout 內部剩下的所有決策一律用現有 adept 啟發式（+15% 隨機）走完。
  *     少了這條，出牌 rollout 途中又跑一次效果 bandit，複雜度會指數爆炸。
  */
 
@@ -267,18 +267,6 @@ export const FATE_TARGET_LADDER: LadderStep[] = [
 ];
 
 /*
- * 4 倍之前的階梯，留著當對照組（--fate-ladder lean）。
- * 兩者的強度差異要能直接對打量出來，不然「成本更高」只是感覺。
- */
-export const FATE_TARGET_LADDER_LEAN: LadderStep[] = [
-    {samples: 1, keep: 16},
-    {samples: 2, keep: 8},
-    {samples: 4, keep: 4},
-    {samples: 8, keep: 2},
-    {samples: 16, keep: 1},
-];
-
-/*
  * 預設階梯：512 →(1) 128 →(1) 32 →(1) 16 →(2) 8 →(4) 4 →(8) 2 →(16) 1
  * 成本 800 次模擬，冠軍身上累積 33 個樣本。
  *
@@ -295,88 +283,6 @@ export const DEFAULT_BANDIT_CONFIG: BanditConfig = {
         {samples: 4, keep: 4},
         {samples: 8, keep: 2},
         {samples: 16, keep: 1},
-    ],
-    effectBudget: 100,
-    targetBudget: 60,
-    simulateTargets: true,
-    fateLadder: FATE_TARGET_LADDER,
-};
-
-/*
- * 全程砍一半：512>256>128>64>32>16>8>4>2>1，模擬 1,1,1,1,2,4,8,16,32。
- * 成本 1280、冠軍樣本 66（預設值是 800、33）。
- *
- * 量過了：對預設值 1300 局合併後 50.7% / 49.3%（1.0 sigma），沒有差別。
- * 多花 60% 運算買不到東西，所以沒有採用。
- *
- * 第一次測出 +8pp（3.57 sigma）但重測不成立 —— 那次是假訊號。
- * 破綻是傳遞性：merged > halving > gentle > merged 形成循環，
- * 三個兩兩比較加起來矛盾約 16pp。單看一次結果的 sigma 值會被這種東西騙過去，
- * 尤其在同一輪調參跑了十幾次 A/B 的情況下（多重比較）。
- */
-export const GENTLE_BANDIT_CONFIG: BanditConfig = {
-    playPool: 512,
-    playLadder: [
-        {samples: 1, keep: 256},
-        {samples: 1, keep: 128},
-        {samples: 1, keep: 64},
-        {samples: 1, keep: 32},
-        {samples: 2, keep: 16},
-        {samples: 4, keep: 8},
-        {samples: 8, keep: 4},
-        {samples: 16, keep: 2},
-        {samples: 32, keep: 1},
-    ],
-    effectBudget: 100,
-    targetBudget: 60,
-    simulateTargets: true,
-    fateLadder: FATE_TARGET_LADDER,
-};
-
-/*
- * 全程砍一半，但決賽圈每階只花 32 次（不是 64）。成本 1120、冠軍樣本 35。
- *
- * 和 GENTLE 一樣，量過對預設值沒有可測差異。留著這兩個 preset 是為了記錄
- * 「階梯形狀已經調到不重要了」這個結論，並讓之後想重驗的人可以直接 --ladder 跑。
- *
- * 要注意這類比較的解析度：500 局的 1 sigma 是 ±2.24%，而這些變體之間的真實差距
- * 看起來在 2~3pp 以內 —— 想分辨得出來，每次比較大概需要 3000 局以上。
- */
-export const HALVING_BANDIT_CONFIG: BanditConfig = {
-    playPool: 512,
-    playLadder: [
-        {samples: 1, keep: 256},
-        {samples: 1, keep: 128},
-        {samples: 1, keep: 64},
-        {samples: 1, keep: 32},
-        {samples: 1, keep: 16},
-        {samples: 2, keep: 8},
-        {samples: 4, keep: 4},
-        {samples: 8, keep: 2},
-        {samples: 16, keep: 1},
-    ],
-    effectBudget: 100,
-    targetBudget: 60,
-    simulateTargets: true,
-    fateLadder: FATE_TARGET_LADDER,
-};
-
-/*
- * 舊的做法：預篩與 Successive Halving 是兩套獨立機制，預篩累積的樣本進 SH 時被丟掉。
- * 寫成階梯只是為了能和新版直接對打比較，不是拿來用的。
- */
-export const LEGACY_BANDIT_CONFIG: BanditConfig = {
-    playPool: 384,
-    playLadder: [
-        {samples: 1, keep: 192},
-        {samples: 1, keep: 96},
-        {samples: 1, keep: 48},
-        {samples: 1, keep: 32},
-        {samples: 1, keep: 16},
-        {samples: 3, keep: 8},
-        {samples: 7, keep: 4},
-        {samples: 15, keep: 2},
-        {samples: 30, keep: 1},
     ],
     effectBudget: 100,
     targetBudget: 60,
@@ -596,7 +502,7 @@ export function banditChooseActivation(
         ...options.map((o, index) => ({index, effectId: o.effectId, areaIdx: o.areaIdx})),
     ];
     const samplesPerArm = Math.max(2, Math.floor(cfg.effectBudget / arms.length));
-    const seedBase = Math.floor(Math.random() * 1e9);
+    const seedBase = Math.floor(rng() * 1e9);
 
     const entries = arms.map(arm => ({arm, stats: newStats()}));
     for (let j = 0; j < samplesPerArm; j++) {

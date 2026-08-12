@@ -8,7 +8,8 @@ import {
   type OpeningMode,
   SimulationGame,
 } from './game';
-import {type BanditConfig, DEFAULT_BANDIT_CONFIG, FATE_TARGET_LADDER, FATE_TARGET_LADDER_LEAN, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './bandit';
+import {type BanditConfig, DEFAULT_BANDIT_CONFIG, FATE_TARGET_LADDER} from './bandit';
+import {FATE_TARGET_LADDER_LEAN, GENTLE_BANDIT_CONFIG, HALVING_BANDIT_CONFIG, LEGACY_BANDIT_CONFIG} from './tuningPresets';
 
 // 給 --ladder / --b-ladder 用的階梯預設值，方便兩種形狀直接對打
 const LADDER_PRESETS: Record<string, BanditConfig> = {
@@ -32,10 +33,23 @@ function pickFateLadder(name: string) {
   throw new Error('--fate-ladder must be one of: on, lean, off');
 }
 
-type MatchupMode = 'custom' | 'expert-mirror' | 'expert-normal' | 'bandit-expert' | 'bandit-tune';
+type MatchupMode = 'custom' | 'adept-mirror' | 'adept-normal' | 'expert-adept' | 'expert-tune';
 
-function isAiDifficulty(v: string): v is AiDifficulty {
-  return v === 'normal' || v === 'expert' || v === 'bandit';
+function parseAiDifficulty(v: string): AiDifficulty | null {
+  if (v === 'normal' || v === 'adept' || v === 'expert') return v;
+  if (v === 'bandit') return 'expert'; // legacy alias
+  return null;
+}
+
+function parseMatchup(v: string): MatchupMode | null {
+  const aliases: Record<string, MatchupMode> = {
+    'expert-mirror': 'adept-mirror',
+    'expert-normal': 'adept-normal',
+    'bandit-expert': 'expert-adept',
+    'bandit-tune': 'expert-tune',
+  };
+  if (v === 'custom' || v === 'adept-mirror' || v === 'adept-normal' || v === 'expert-adept' || v === 'expert-tune') return v;
+  return aliases[v] ?? null;
 }
 
 function parseArgs() {
@@ -72,17 +86,20 @@ function parseArgs() {
       opts.opening = next;
       i++;
     } else if (arg === '--ai' && next) {
-      if (!isAiDifficulty(next)) throw new Error('--ai must be "normal", "expert" or "bandit"');
-      opts.p0Ai = next;
-      opts.p1Ai = next;
+      const ai = parseAiDifficulty(next);
+      if (!ai) throw new Error('--ai must be "normal", "adept" or "expert"');
+      opts.p0Ai = ai;
+      opts.p1Ai = ai;
       i++;
     } else if (arg === '--p0-ai' && next) {
-      if (!isAiDifficulty(next)) throw new Error('--p0-ai must be "normal", "expert" or "bandit"');
-      opts.p0Ai = next;
+      const ai = parseAiDifficulty(next);
+      if (!ai) throw new Error('--p0-ai must be "normal", "adept" or "expert"');
+      opts.p0Ai = ai;
       i++;
     } else if (arg === '--p1-ai' && next) {
-      if (!isAiDifficulty(next)) throw new Error('--p1-ai must be "normal", "expert" or "bandit"');
-      opts.p1Ai = next;
+      const ai = parseAiDifficulty(next);
+      if (!ai) throw new Error('--p1-ai must be "normal", "adept" or "expert"');
+      opts.p1Ai = ai;
       i++;
     } else if (arg === '--ladder' && next) {
       opts.banditConfig = pickLadder(next);
@@ -109,11 +126,9 @@ function parseArgs() {
       opts.banditConfigB.effectBudget = Number(next);
       i++;
     } else if (arg === '--matchup' && next) {
-      if (next !== 'custom' && next !== 'expert-mirror' && next !== 'expert-normal'
-          && next !== 'bandit-expert' && next !== 'bandit-tune') {
-        throw new Error('--matchup must be "custom", "expert-mirror", "expert-normal", "bandit-expert" or "bandit-tune"');
-      }
-      opts.matchup = next;
+      const matchup = parseMatchup(next);
+      if (!matchup) throw new Error('--matchup must be custom, adept-mirror, adept-normal, expert-adept or expert-tune');
+      opts.matchup = matchup;
       i++;
     }
   }
@@ -121,9 +136,9 @@ function parseArgs() {
   if (!Number.isInteger(opts.games) || opts.games <= 0) throw new Error('--games must be a positive integer');
   if (!Number.isFinite(opts.hp) || opts.hp <= 0) throw new Error('--hp must be a positive number');
   if (!Number.isInteger(opts.maxTurns) || opts.maxTurns <= 0) throw new Error('--max-turns must be a positive integer');
-  if (opts.matchup === 'expert-mirror') {
-    opts.p0Ai = 'expert';
-    opts.p1Ai = 'expert';
+  if (opts.matchup === 'adept-mirror') {
+    opts.p0Ai = 'adept';
+    opts.p1Ai = 'adept';
   }
 
   return opts;
@@ -237,21 +252,21 @@ function main() {
   console.log(`Max turns per game: ${opts.maxTurns}`);
   console.log('');
 
-  if (opts.matchup === 'expert-normal') {
-    runTwoLegMatchup(opts, 'expert', 'normal');
+  if (opts.matchup === 'adept-normal') {
+    runTwoLegMatchup(opts, 'adept', 'normal');
     return;
   }
 
-  if (opts.matchup === 'bandit-expert') {
-    runTwoLegMatchup(opts, 'bandit', 'expert');
+  if (opts.matchup === 'expert-adept') {
+    runTwoLegMatchup(opts, 'expert', 'adept');
     return;
   }
 
   /*
-   * 兩組 bandit 設定直接對打。
-   * 拿兩邊各自去打 expert 是量不出差距的 —— 都已經七成多，逼近天花板。
+   * 兩組 expert/bandit 設定直接對打。
+   * 拿兩邊各自去打 adept 是量不出差距的 —— 都已經七成多，逼近天花板。
    */
-  if (opts.matchup === 'bandit-tune') {
+  if (opts.matchup === 'expert-tune') {
     const fmt = (c: BanditConfig) => {
       const cost = c.playLadder.reduce((sum, st, idx) => {
         const alive = idx === 0 ? c.playPool : c.playLadder[idx - 1].keep;
@@ -266,11 +281,11 @@ function main() {
     console.log('');
 
     console.log('--- Leg 1: A 先手 ---');
-    const leg1 = runSeries(opts, 'bandit', 'bandit', false);
+    const leg1 = runSeries(opts, 'expert', 'expert', false);
     printSeries(leg1);
     console.log('');
     console.log('--- Leg 2: B 先手 ---');
-    const leg2 = runSeries(opts, 'bandit', 'bandit', true);
+    const leg2 = runSeries(opts, 'expert', 'expert', true);
     printSeries(leg2);
     console.log('');
 
@@ -288,7 +303,7 @@ function main() {
   }
 
   const stats = runSeries(opts, opts.p0Ai, opts.p1Ai);
-  if (opts.matchup === 'expert-mirror') console.log('Matchup: expert-mirror');
+  if (opts.matchup === 'adept-mirror') console.log('Matchup: adept-mirror');
   else console.log('Matchup: custom');
   console.log('');
   printSeries(stats);
