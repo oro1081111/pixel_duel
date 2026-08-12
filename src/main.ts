@@ -884,18 +884,17 @@ function renderHomeMenuButtonHTML(
 }
 
 /*
- * 電腦強度切換。做成兩格分段按鈕而不是開關，因為「高手 / 專家」是並列的兩個
- * 選項，開關會讓人以為其中一個是「關掉」的狀態。
- * 只影響 CvP / PvC；PvP 沒有電腦。
+ * 電腦強度切換。三個強度都是並列選項，只影響 CvP / PvC；PvP 沒有電腦。
+ * 首頁要兼容小螢幕，因此按鈕只顯示「普通 / 高手 / 專家」。
  */
 function renderAiLevelToggleHTML() {
-    const cell = (level: AiLevel, hint: string) => {
+    const cell = (level: AiLevel) => {
         const on = aiLevel === level;
         return `
             <button
                 id="aiLevel-${level}"
                 aria-pressed="${on}"
-                class="flex-1 rounded-none px-2 py-1.5 border-[3px] leading-none whitespace-nowrap ${
+                class="flex-1 min-w-0 rounded-none px-1.5 py-1.5 border-[3px] leading-none whitespace-nowrap ${
                     on
                         ? 'bg-[#c48e36] border-[#c48e36] shadow-[2px_2px_0_0_#011c31]'
                         : 'bg-[#16344c] border-[#3d5e7a] hover:border-[#c48e36]'
@@ -904,18 +903,15 @@ function renderAiLevelToggleHTML() {
                 <span class="text-[14px] font-black ${on ? 'text-[#0d2032]' : 'text-[#e7c980]'}">
                     ${AI_LEVEL_LABEL[level]}
                 </span>
-                <span class="ml-1.5 text-[10px] font-bold ${on ? 'text-[#0d2032]/70' : 'text-white/50'}">
-                    ${hint}
-                </span>
             </button>
         `;
     };
-    // 單行排版：首頁在 iPhone SE 上原本剛好塞滿，多一個兩行區塊就會把版權文字擠出畫面
     return `
-        <div class="mt-3 flex items-center gap-2">
-            <span class="text-[10px] font-black tracking-[0.15em] text-white/40 shrink-0">電腦強度</span>
-            ${cell('adept', '出手快')}
-            ${cell('expert', '較強')}
+        <div class="mt-3 flex items-center gap-1.5">
+            <span class="text-[10px] font-black tracking-[0.12em] text-white/40 shrink-0">電腦強度</span>
+            ${cell('normal')}
+            ${cell('adept')}
+            ${cell('expert')}
         </div>
     `;
 }
@@ -961,7 +957,7 @@ function renderHomeScreen() {
     (wrap.querySelector('#modeCvp') as HTMLButtonElement).onclick = () => startCvpGame();
     (wrap.querySelector('#modePvc') as HTMLButtonElement).onclick = () => startPvcGame();
     (wrap.querySelector('#rulesBtn') as HTMLButtonElement).onclick = () => showRules();
-    (['adept', 'expert'] as const).forEach(level => {
+    (['normal', 'adept', 'expert'] as const).forEach(level => {
         const btn = wrap.querySelector(`#aiLevel-${level}`) as HTMLButtonElement | null;
         if (btn) btn.onclick = () => {
             aiLevel = level;
@@ -1304,14 +1300,15 @@ let aiSpeed = 0.7;
 
 /*
  * 電腦強度。
- *  - 'adept'（高手）：原本的啟發式 AI，使用共用 heuristic 評分。
- *  - 'expert'（專家）：模擬決策 AI，把每個候選實際打過幾百次再挑。
- * 兩者共用同一套規則與同一個回合流程；專家另外使用勝局出牌率規劃購買。
+ *  - 'normal'（普通）：隨機基準 AI，只在合法行動中做隨機選擇。
+ *  - 'adept'（高手）：啟發式 AI，使用共用 heuristic 評分。
+ *  - 'expert'（專家）：模擬決策 AI，把候選方案放進 rollout 比較後再挑。
+ * 三者共用同一套遊戲規則；專家另外使用勝局出牌率規劃購買。
  */
-type AiLevel = 'adept' | 'expert';
+type AiLevel = 'normal' | 'adept' | 'expert';
 let aiLevel: AiLevel = 'expert';
 
-const AI_LEVEL_LABEL: Record<AiLevel, string> = {adept: '高手', expert: '專家'};
+const AI_LEVEL_LABEL: Record<AiLevel, string> = {normal: '普通', adept: '高手', expert: '專家'};
 
 /*
  * 「專家」的模擬決策引擎是動態載入的（約 40KB）。
@@ -1430,6 +1427,22 @@ function listSelfAttackHitTargets() {
 function chooseHighestAttackTarget<T extends {val: number}>(targets: T[]): T {
     const maxVal = Math.max(...targets.map(t => t.val));
     return chooseUniform(targets.filter(t => t.val === maxVal));
+}
+
+function chooseNormalAttackTarget<T extends {val: number}>(targets: T[]): T {
+    return Math.random() < 0.9 ? chooseHighestAttackTarget(targets) : chooseUniform(targets);
+}
+
+function chooseNormalFateDiceIndices() {
+    const n = S.diceResults.length;
+    if (n === 0) return [];
+    const k = randInt(1, n);
+    const indices = Array.from({length: n}, (_, i) => i);
+    for (let i = indices.length - 1; i > 0; i--) {
+        const j = randInt(0, i);
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+    return indices.slice(0, k);
 }
 
 function createAdeptHeuristic() {
@@ -1576,7 +1589,7 @@ async function aiResolveSelectionModesStep() {
     if (S.luckySelectionMode && S.diceResults.length > 0) {
         const dice = S.diceResults.map((_, i) => i);
         const idx = (await banditPickTarget(dice, (clone, i) => { clone.diceResults.splice(i, 1); }))
-            ?? chooseLowestValueDieIndex();
+            ?? (aiLevel === 'normal' ? randInt(0, S.diceResults.length - 1) : chooseLowestValueDieIndex());
         logAi(`${getAiName()} 移除低價值骰子 #${idx + 1}(${S.diceResults[idx]})`);
         await sleep(randInt(280, 500));
         removeLuckyDie(idx);
@@ -1593,7 +1606,7 @@ async function aiResolveSelectionModesStep() {
             },
             // 命運的候選有幾十個，平均分預算會薄到只剩雜訊，改用淘汰階梯
             (await loadAiEngine())?.fateLadder,
-        )) ?? chooseAdeptFateDiceIndices();
+        )) ?? (aiLevel === 'normal' ? chooseNormalFateDiceIndices() : chooseAdeptFateDiceIndices());
         logAi(`${getAiName()} 重擲 ${chosen.length} 顆低價值骰（#${chosen.map(i => i + 1).join(',')}）`);
         await sleep(randInt(280, 500));
         chosen.forEach(i => toggleDiceIndexSelection(i));
@@ -1605,7 +1618,7 @@ async function aiResolveSelectionModesStep() {
     if (S.evasionSelectionMode) {
         const targets = listOpponentDodgeTargets();
         if (targets.length > 0) {
-            const t = chooseHighestAttackTarget(targets);
+            const t = aiLevel === 'normal' ? chooseNormalAttackTarget(targets) : chooseHighestAttackTarget(targets);
             logAi(`${getAiName()} 閃避：優先無視最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             targetEvasion(t.areaIdx, t.hitIdx);
@@ -1623,7 +1636,7 @@ async function aiResolveSelectionModesStep() {
         const aIdx = (await banditPickTarget(copyable, (clone, i) => {
             const card = clone.opponentPublic().activeAreaEffects[i];
             if (card && applyIllusion(clone.currentPlayerPublic(), src, card)) clone.handleJudgingPublic();
-        })) ?? chooseAdeptIllusionTargetArea();
+        })) ?? (aiLevel === 'normal' ? chooseUniform(copyable) : chooseAdeptIllusionTargetArea());
         if (aIdx >= 0) {
             const name = getOpponent().activeAreaEffects[aIdx]?.effectName || '未知';
             logAi(`${getAiName()} 幻象：複製高價值效果「${name}」`);
@@ -1640,7 +1653,7 @@ async function aiResolveSelectionModesStep() {
         const dice = S.diceResults.map((_, i) => i);
         const idx = (await banditPickTarget(dice, (clone, i) => {
             applyFrost(clone.currentPlayerPublic(), src, clone.diceResults, i);
-        })) ?? chooseAdeptFrostDieIndex();
+        })) ?? (aiLevel === 'normal' ? randInt(0, S.diceResults.length - 1) : chooseAdeptFrostDieIndex());
         logAi(`${getAiName()} 冰霜：捨棄最適合的骰子 #${idx + 1}(${S.diceResults[idx]})`);
         await sleep(randInt(280, 500));
         targetFrost(idx);
@@ -1650,7 +1663,7 @@ async function aiResolveSelectionModesStep() {
     if (S.chargeSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
-            const t = chooseHighestAttackTarget(targets);
+            const t = aiLevel === 'normal' ? chooseNormalAttackTarget(targets) : chooseHighestAttackTarget(targets);
             logAi(`${getAiName()} 充能：強化最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             useCharge(t.areaIdx, t.hitIdx);
@@ -1663,7 +1676,7 @@ async function aiResolveSelectionModesStep() {
     if (S.reproductionSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
-            const t = chooseHighestAttackTarget(targets);
+            const t = aiLevel === 'normal' ? chooseNormalAttackTarget(targets) : chooseHighestAttackTarget(targets);
             logAi(`${getAiName()} 再現：複製最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             targetReproduction(t.areaIdx, t.hitIdx);
@@ -1676,7 +1689,7 @@ async function aiResolveSelectionModesStep() {
     if (S.flareSelectionMode) {
         const targets = listSelfAttackHitTargets();
         if (targets.length > 0) {
-            const t = chooseHighestAttackTarget(targets);
+            const t = aiLevel === 'normal' ? chooseNormalAttackTarget(targets) : chooseHighestAttackTarget(targets);
             logAi(`${getAiName()} 閃光：翻倍最高攻擊 ${t.val}`);
             await sleep(randInt(280, 500));
             targetFlare(t.areaIdx, t.hitIdx);
@@ -1710,6 +1723,18 @@ async function aiActivationLoopStep() {
             await sleep(randInt(140, 260));
             return false;
         }
+        logAi(`${getAiName()} 發動效果：${chosen.label}`);
+        await sleep(randInt(280, 520));
+        chosen.run();
+        return true;
+    }
+
+    if (aiLevel === 'normal') {
+        if (Math.random() > 0.9) {
+            await sleep(randInt(140, 260));
+            return false;
+        }
+        const chosen = chooseUniform(acts);
         logAi(`${getAiName()} 發動效果：${chosen.label}`);
         await sleep(randInt(280, 520));
         chosen.run();
@@ -1766,6 +1791,23 @@ async function aiDoPlayPhase() {
             playToBoard(step.areaIdx);
             await sleep(randInt(160, 300));
         }
+    } else if (aiLevel === 'normal') {
+        const maxPlays = S.inPreparationPhase ? 1 : Math.min(3, p.hand.length);
+        const playCount = randInt(1, maxPlays);
+        logAi(`${getAiName()} 出牌：隨機打出 ${playCount} 張`);
+        await sleep(randInt(250, 450));
+
+        for (let i = 0; i < playCount && p.hand.length > 0; i++) {
+            const handIdx = randInt(0, p.hand.length - 1);
+            const areaIdx = randInt(0, 2);
+            const cardName = p.hand[handIdx]?.effectName || '未知';
+            S.selectedHandCardIndex = handIdx;
+            logAi(`${getAiName()} 出牌：「${cardName}」→ 區域${areaIdx + 1}`);
+            await sleep(randInt(260, 480));
+            playToBoard(areaIdx);
+            await sleep(randInt(160, 300));
+            if (S.inPreparationPhase) break;
+        }
     } else {
         const maxPlays = S.inPreparationPhase ? 1 : Math.min(3, p.hand.length);
         const playCount = Math.min(maxPlays, Math.max(1, chooseAdeptPlayCount()));
@@ -1809,7 +1851,7 @@ async function aiDoRollPhase() {
     const rollOptions = shouldRollFiveBecauseNoHand
         ? [5]
         : (p.cardsPlayedThisTurn > 0 ? [5 - p.cardsPlayedThisTurn] : [2, 3, 4]);
-    const count = chooseAdeptRollCount(rollOptions);
+    const count = aiLevel === 'normal' ? chooseUniform(rollOptions) : chooseAdeptRollCount(rollOptions);
     logAi(`${getAiName()} 擲骰：選擇 ${count} 顆`);
     await sleep(randInt(240, 420));
     rollDice(count);
@@ -1874,7 +1916,7 @@ async function aiDoBuyPhase() {
         return;
     }
 
-    // 高手維持既有啟發式購買策略。
+    // 普通從合法購買中隨機選；高手維持既有啟發式購買策略。
     const actions: Array<{label: string; score: number; run: () => void}> = [];
     const nextDrawIndex = S.buyDeckDrawCount + 1;
     const nextDrawCost = getDeckDrawCost(nextDrawIndex);
@@ -1905,8 +1947,12 @@ async function aiDoBuyPhase() {
         return;
     }
 
-    const maxScore = Math.max(...actions.map(a => a.score));
-    const chosen = chooseUniform(actions.filter(a => a.score === maxScore));
+    const chosen = aiLevel === 'normal'
+        ? chooseUniform(actions)
+        : (() => {
+            const maxScore = Math.max(...actions.map(a => a.score));
+            return chooseUniform(actions.filter(a => a.score === maxScore));
+        })();
     logAi(`${getAiName()} 購買：${chosen.label}`);
     await sleep(randInt(280, 500));
     chosen.run();
