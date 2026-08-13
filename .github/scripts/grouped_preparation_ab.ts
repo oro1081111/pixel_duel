@@ -8,7 +8,7 @@ const getArg = (name: string, fallback: number) => {
 };
 const batch = getArg('--batch', 0);
 const pairs = getArg('--pairs', 250);
-const seedBase = 930000000 + batch * 100000;
+const seedBase = 1930000000 + batch * 100000;
 
 let groupedWins = 0;
 let baselineWins = 0;
