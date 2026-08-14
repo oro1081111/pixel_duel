@@ -1321,6 +1321,7 @@ const AI_LEVEL_LABEL: Record<AiLevel, string> = {normal: '普通', adept: '高�
 type AiEngine = {
     SimulationGame: typeof import('./sim/game').SimulationGame;
     banditChoosePlayPlan: typeof import('./sim/bandit').banditChoosePlayPlan;
+    banditChoosePreparationPlay: typeof import('./sim/bandit').banditChoosePreparationPlay;
     banditChooseActivation: typeof import('./sim/bandit').banditChooseActivation;
     banditChooseTarget: typeof import('./sim/bandit').banditChooseTarget;
     enumerateDiceSubsets: typeof import('./sim/bandit').enumerateDiceSubsets;
@@ -1336,6 +1337,7 @@ function loadAiEngine(): Promise<AiEngine | null> {
             .then(([game, bandit]) => ({
                 SimulationGame: game.SimulationGame,
                 banditChoosePlayPlan: bandit.banditChoosePlayPlan,
+                banditChoosePreparationPlay: bandit.banditChoosePreparationPlay,
                 banditChooseActivation: bandit.banditChooseActivation,
                 banditChooseTarget: bandit.banditChooseTarget,
                 enumerateDiceSubsets: bandit.enumerateDiceSubsets,
@@ -1772,13 +1774,19 @@ async function aiDoPlayPhase() {
     }
 
     /*
-     * 專家：把「打幾張、哪幾張、放哪一區」當成完整方案來比較，各模擬數十次。
-     * 準備階段只能出 1 張，方案取第一步就好。
+     * 專家正式回合：比較完整出牌方案。
+     * 專家準備階段：另外做 setup-potential rollout，假想下回合再出 1~3 張（4/3/2 骰），
+     * 但真正只執行最佳完整方案的第一張準備牌；假想 future 不保存。
      */
     const engine = aiLevel === 'expert' ? await loadAiEngine() : null;
     if (engine) {
-        const plan = engine.banditChoosePlayPlan(makeAiSandbox(engine)) ?? [];
-        const steps = S.inPreparationPhase ? plan.slice(0, 1) : plan;
+        const sandbox = makeAiSandbox(engine);
+        const steps = S.inPreparationPhase
+            ? (() => {
+                const step = engine.banditChoosePreparationPlay(sandbox);
+                return step ? [step] : [];
+            })()
+            : (engine.banditChoosePlayPlan(sandbox) ?? []);
         logAi(`${getAiName()} 出牌：規劃打出 ${steps.length} 張`);
         await sleep(randInt(250, 450));
 

@@ -1,6 +1,7 @@
 import type {GameCard} from '../engine/state';
 import type {SimulationGame} from './game';
 import {shuffled} from '../engine/deck';
+import {beginTurnState} from '../engine/turnFlow';
 import {makeRng, rng, withRng} from './rng';
 
 /*
@@ -446,6 +447,112 @@ function applyPlan(game: SimulationGame, plan: PlayStep[]) {
         if (handIdx === -1) continue;
         game.playCardPublic(handIdx, step.areaIdx);
     }
+}
+
+/*
+ * 準備階段不是在評估「單獨放這一張有多強」，而是在評估它作為下一個正式回合
+ * 佈局起點的潛力。每個候選包含：
+ *   - 現在真正會放下的 1 張 preparation
+ *   - 假想下個自己回合再出的 1~3 張 future
+ *
+ * future.length = 1 / 2 / 3 時，正式回合會自然擲 4 / 3 / 2 顆骰。
+ * 中間的對手回合刻意不模擬：這是 setup-potential rollout，不是偷猜隱藏手牌的兩回合預測。
+ */
+export type PreparationPlan = {
+    preparation: PlayStep;
+    future: PlayStep[];
+};
+
+function preparationPlanKey(plan: PreparationPlan) {
+    // 最終盤面相同不代表準備選擇相同；真正會執行的第一步一定要放進 key。
+    return `${plan.preparation.cardId}@${plan.preparation.areaIdx}|${planKey([
+        plan.preparation,
+        ...plan.future,
+    ])}`;
+}
+
+export function enumeratePreparationPlans(hand: GameCard[]): PreparationPlan[] {
+    if (hand.length < 2) return [];
+
+    const plans: PreparationPlan[] = [];
+    const seen = new Set<string>();
+    const maxFuture = Math.min(3, hand.length - 1);
+
+    for (let prepIdx = 0; prepIdx < hand.length; prepIdx++) {
+        for (let prepArea = 0; prepArea < 3; prepArea++) {
+            const preparation: PlayStep = {cardId: hand[prepIdx].id, areaIdx: prepArea};
+            const future: PlayStep[] = [];
+            const used = new Set<number>([prepIdx]);
+
+            const recurse = () => {
+                if (future.length > 0) {
+                    const plan: PreparationPlan = {preparation, future: [...future]};
+                    const key = preparationPlanKey(plan);
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        plans.push(plan);
+                    }
+                }
+                if (future.length === maxFuture) return;
+
+                for (let i = 0; i < hand.length; i++) {
+                    if (used.has(i)) continue;
+                    used.add(i);
+                    for (let areaIdx = 0; areaIdx < 3; areaIdx++) {
+                        future.push({cardId: hand[i].id, areaIdx});
+                        recurse();
+                        future.pop();
+                    }
+                    used.delete(i);
+                }
+            };
+
+            recurse();
+        }
+    }
+
+    return plans;
+}
+
+export function banditChoosePreparationPlay(
+    game: SimulationGame,
+    cfg: BanditConfig = DEFAULT_BANDIT_CONFIG,
+): PlayStep | null {
+    const myIdx = game.currentPlayerIndex;
+    const hand = game.players[myIdx].hand;
+    if (hand.length === 0) return null;
+
+    const plans = enumeratePreparationPlans(hand);
+    if (plans.length === 0) {
+        // 正常規則下準備玩家固定有 4 張；這只是防守性 fallback。
+        return {cardId: hand[0].id, areaIdx: 0};
+    }
+
+    // 4 張起始手牌去除等價盤面後只有 1152 個候選，可完整枚舉；
+    // 不套 playPool，避免某一個準備第一步因隨機抽樣而完全沒被評估。
+    const seedBase = Math.floor(rng() * 1e9);
+    const best = runLadder(
+        plans,
+        (plan, seed) => withRng(makeRng(seed), () => {
+            const clone = game.cloneForRollout();
+
+            // 先放真正的準備牌；它留在場上，但不算下個正式回合已出牌。
+            applyPlan(clone, [plan.preparation]);
+            beginTurnState(clone);
+
+            // 再放假想的 1~3 張正式回合牌。cardsPlayedThisTurn 因此只會是 1~3，
+            // 既有 aiRollPhase() 會自然得到 4 / 3 / 2 顆骰。
+            applyPlan(clone, plan.future);
+            clone.currentPhaseIndex = 1;
+            clone.finishTurnForRollout();
+            return evaluateTurnOutcome(clone, myIdx);
+        }),
+        cfg.playLadder,
+        seedBase,
+    );
+
+    // 假想 future 只用來評估 setup potential；不保存、不承諾下回合照做。
+    return best.preparation;
 }
 
 export function banditChoosePlayPlan(

@@ -6,7 +6,7 @@
  * 現在 CLI 的部分留在 runSimulation.ts，這裡只有純邏輯。
  */
 
-import {banditChooseActivation, banditChoosePlayPlan, banditChooseTarget, enumerateDiceSubsets, type BanditConfig, DEFAULT_BANDIT_CONFIG} from './bandit';
+import {banditChooseActivation, banditChoosePlayPlan, banditChoosePreparationPlay, banditChooseTarget, enumerateDiceSubsets, type BanditConfig, DEFAULT_BANDIT_CONFIG} from './bandit';
 import {chooseUniform, randInt, rng} from './rng';
 
 // 與 UI 共用同一份規則型別與純計算（見 src/engine/state.ts）
@@ -324,7 +324,17 @@ export class SimulationGame {
   private preparationPhase() {
     this.currentPlayerIndex = 1;
     this.currentPhaseIndex = 0;
-    this.playRandomCardsForCurrentPlayer(1);
+
+    if (this.currentAiDifficulty() === 'expert') {
+      const step = banditChoosePreparationPlay(this, this.currentBanditConfig());
+      if (step) {
+        const handIdx = this.currentPlayer().hand.findIndex(c => c.id === step.cardId);
+        if (handIdx !== -1) this.playCard(handIdx, step.areaIdx);
+      }
+    } else {
+      this.playRandomCardsForCurrentPlayer(1);
+    }
+
     this.currentPlayer().cardsPlayedThisTurn = 0;
     this.currentPlayerIndex = 0;
     this.currentPhaseIndex = 0;
